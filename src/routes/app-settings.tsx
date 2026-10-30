@@ -27,6 +27,7 @@ import { useFreeModels } from "#/hooks/query/use-free-models";
 import { useActiveBackend } from "#/contexts/active-backend-context";
 import { formatModelNameForDisplay } from "#/utils/format-model-name";
 import { getLockedCloudHost } from "#/api/agent-server-config";
+import { CustomBuildCard } from "#/components/features/settings/custom-build-card";
 
 const AUTOMATIC_TITLE_LLM_PROFILE_KEY = "__automatic__";
 
@@ -39,7 +40,12 @@ const AUTOMATIC_TITLE_LLM_PROFILE_KEY = "__automatic__";
  */
 export function AppSettingsScreen() {
   const { backend, orgId } = useActiveBackend();
-  return <AppSettingsForm key={`${backend.id}:${orgId ?? ""}`} />;
+  return (
+    <div className="flex flex-col gap-6">
+      <AppSettingsForm key={`${backend.id}:${orgId ?? ""}`} />
+      <CustomBuildCard />
+    </div>
+  );
 }
 
 function AppSettingsForm() {
