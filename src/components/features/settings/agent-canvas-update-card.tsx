@@ -28,6 +28,7 @@ import DockerIcon from "#/icons/docker.svg?react";
 import NpmIcon from "#/icons/npm.svg?react";
 import { I18nKey } from "#/i18n/declaration";
 import { getSelfUpdateBridge } from "#/utils/self-update-bridge";
+import { UpstreamSyncSidebarCard } from "#/components/features/settings/upstream-sync-sidebar-card";
 import { cn } from "#/utils/utils";
 
 const COPY_FEEDBACK_MS = 2000;
@@ -291,7 +292,7 @@ interface AgentCanvasUpdateCardProps {
  * degrade to a quiet inline message. Hidden in locked-to-Cloud deployments —
  * the hosted canvas has no npm/docker install to update.
  */
-export function AgentCanvasUpdateCard({
+function AgentCanvasNpmUpdateCard({
   hideWhenUpToDate = false,
 }: AgentCanvasUpdateCardProps) {
   const { t } = useTranslation("openhands");
@@ -372,4 +373,17 @@ export function AgentCanvasUpdateCard({
       )}
     </>
   );
+}
+
+/**
+ * Fork wrapper: in the built desktop app the npm update path does not apply, so
+ * the sidebar shows the upstream sync status instead. In the browser/Cloud the
+ * upstream npm card is rendered unchanged. The bridge check is not a hook, so
+ * both branches keep their own hooks inside their own component.
+ */
+export function AgentCanvasUpdateCard(props: AgentCanvasUpdateCardProps) {
+  // The same props to either card: the desktop sync card reads hideWhenUpToDate
+  // exactly like the npm one, so a call site cannot change meaning by picking.
+  if (getSelfUpdateBridge()) return <UpstreamSyncSidebarCard {...props} />;
+  return <AgentCanvasNpmUpdateCard {...props} />;
 }

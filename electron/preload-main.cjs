@@ -108,4 +108,22 @@ contextBridge.exposeInMainWorld("agentCanvasSelfUpdate", {
     ipcRenderer.on("self-update:log", handler);
     return () => ipcRenderer.removeListener("self-update:log", handler);
   },
+
+  // In-app upstream sync (see electron/upstream-sync.mjs). The renderer sends no
+  // paths, commands or branch names: `kind` is one of the agent choices the
+  // main process itself reported as available.
+  /** Read-only snapshot: phase, tags, whether a build/agent is running. */
+  syncState: () => ipcRenderer.invoke("sync:state"),
+  /** `force` re-runs `git fetch`; otherwise a recent fetch is reused. */
+  syncCheck: (force) => ipcRenderer.invoke("sync:check", force),
+  /** Backup branch + rebase onto the newest upstream tag; builds on success. */
+  syncStart: () => ipcRenderer.invoke("sync:start"),
+  /** Hand a paused rebase to a CLI agent: "opencode" | "claude". */
+  syncAgent: (kind) => ipcRenderer.invoke("sync:agent", kind),
+  /** `git rebase --abort` (refused while the agent is still running). */
+  syncAbort: () => ipcRenderer.invoke("sync:abort"),
+  /** Reset the sync branch back to the backup branch of this sync. */
+  syncDiscard: () => ipcRenderer.invoke("sync:discard"),
+  /** One guarded `--force-with-lease` push to the fork. */
+  syncPush: () => ipcRenderer.invoke("sync:push"),
 });
