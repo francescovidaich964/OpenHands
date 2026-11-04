@@ -3,14 +3,15 @@
  *
  * Installing replaces the running app (and stops its backend), so it cannot be
  * done from inside the app: self-update.mjs writes this script to %TEMP%,
- * spawns it detached, and quits. The helper then
+ * starts it through HELPER_LAUNCHER_PS1 (below), and quits. The helper then
  *   1. waits for the app PID to exit, then for every process running from the
  *      install directory to disappear (files in use would break the install),
  *   2. runs the installer silently (/S) and records its exit code,
  *   3. logs to %LOCALAPPDATA%\AgentCanvasBuilds\install.log,
  *   4. relaunches the app — unless an instance is already running (NSIS may
  *      start it itself) — whether or not the install succeeded, so the user
- *      is never left without a running app.
+ *      is never left without a running app,
+ *   5. deletes its own script file.
  */
 export const INSTALL_HELPER_PS1 = String.raw`param(
   [Parameter(Mandatory = $true)][int]$AppPid,
@@ -48,13 +49,13 @@ if (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) {
   $proceed = $false
 }
 if ($proceed) {
-  $deadline = (Get-Date).AddSeconds(30)
+  $deadline = (Get-Date).AddSeconds(60)
   while ((Get-InstallDirProcesses) -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
   }
   $left = @(Get-InstallDirProcesses)
   if ($left.Count -gt 0) {
-    Write-Log ("ABORT: still running from install dir after 30 s: " + (($left | ForEach-Object { '{0}({1})' -f $_.ProcessName, $_.Id }) -join ', '))
+    Write-Log ("ABORT: still running from install dir after 60 s: " + (($left | ForEach-Object { '{0}({1})' -f $_.ProcessName, $_.Id }) -join ', '))
     $proceed = $false
   }
 }
@@ -65,8 +66,15 @@ if ($proceed) {
     Write-Log "ABORT: installer not found: $Installer"
   } else {
     try {
-      $proc = Start-Process -FilePath $Installer -ArgumentList '/S' -Wait -PassThru
-      Write-Log "installer exit code: $($proc.ExitCode)"
+      $proc = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
+      $null = $proc.Handle  # keep a handle so ExitCode is available after exit
+      Write-Log "installer started (pid $($proc.Id))"
+      # Bounded wait: a dialog nobody can see (hidden helper) must not park us forever.
+      if ($proc.WaitForExit(600000)) {
+        Write-Log "installer exit code: $($proc.ExitCode)"
+      } else {
+        Write-Log "installer still running after 10 min (pid $($proc.Id)); not waiting any longer"
+      }
     } catch {
       Write-Log "installer failed to start: $($_.Exception.Message)"
     }
@@ -77,7 +85,7 @@ if ($proceed) {
 Start-Sleep -Seconds 2
 $running = Get-InstallDirProcesses | Where-Object { $_.ProcessName -ieq [IO.Path]::GetFileNameWithoutExtension($AppExe) }
 if ($running) {
-  Write-Log 'app already running (started by the installer); not relaunching'
+  Write-Log ("app already running from the install dir (pid " + (($running | ForEach-Object { $_.Id }) -join ', ') + "); not relaunching")
 } elseif (Test-Path -LiteralPath $AppExe) {
   try {
     Start-Process -FilePath $AppExe
@@ -89,4 +97,29 @@ if ($running) {
   Write-Log "relaunch skipped: $AppExe not found"
 }
 Write-Log 'helper done'
+try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction Stop } catch {}
+`;
+
+/**
+ * Starts the helper. Run by self-update.mjs as a short-lived, NON-detached
+ * child; it prints the helper's PID. The helper is a grandchild of the app on
+ * purpose: libuv puts non-detached children in a kill-on-close job object (they
+ * would die with the app), but lets their own children break away silently;
+ * and `spawn({detached: true})` of powershell.exe was measured to exit 0
+ * without running anything. Arguments come in through environment variables
+ * (AC_HELPER_*) so no path is ever pasted into code.
+ */
+export const HELPER_LAUNCHER_PS1 = String.raw`$ErrorActionPreference = 'Stop'
+$q = { param($s) '"' + $s + '"' }
+$a = @(
+  '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+  '-File', (& $q $env:AC_HELPER_SCRIPT),
+  '-AppPid', $env:AC_HELPER_APP_PID,
+  '-Installer', (& $q $env:AC_HELPER_INSTALLER),
+  '-AppExe', (& $q $env:AC_HELPER_APP_EXE),
+  '-InstallDir', (& $q $env:AC_HELPER_INSTALL_DIR),
+  '-LogFile', (& $q $env:AC_HELPER_LOG_FILE)
+)
+$p = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList $a
+Write-Output $p.Id
 `;

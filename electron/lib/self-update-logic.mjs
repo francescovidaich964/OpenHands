@@ -31,9 +31,10 @@ export function parseArchiveFileName(name) {
 
 /**
  * Whether `installerPath` is an acceptable thing to execute (Windows paths;
- * the installer helper is Windows-only): a `.exe` that is a
- * DIRECT child of the archive directory. No traversal, no nested dirs, no
- * other drives. The comparison is case-insensitive on Windows paths.
+ * the installer helper is Windows-only): a file named like one of our archived
+ * installers that is a DIRECT child of the archive directory. No traversal, no
+ * nested dirs, no other drives, no stray `.exe` someone dropped in there. The
+ * comparison is case-insensitive on Windows paths.
  */
 export function isArchivedInstallerPath(installerPath, archiveDir) {
   if (typeof installerPath !== "string" || typeof archiveDir !== "string") {
@@ -42,12 +43,29 @@ export function isArchivedInstallerPath(installerPath, archiveDir) {
   if (installerPath.includes("\0") || installerPath.trim() === "") return false;
   const resolved = resolve(installerPath);
   const root = resolve(archiveDir);
-  if (!resolved.toLowerCase().endsWith(".exe")) return false;
   return (
+    parseArchiveFileName(basename(resolved)) !== null &&
     dirname(resolved).toLowerCase() === root.toLowerCase() &&
-    basename(resolved) !== "" &&
     resolved.toLowerCase().startsWith(root.toLowerCase() + sep)
   );
+}
+
+/**
+ * The lines of the most recent helper run in install.log (from its last
+ * "helper started" line), at most `max` lines; [] when there is none.
+ */
+export function lastInstallRun(logText, max = 40) {
+  const lines = String(logText ?? "")
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "");
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes("helper started")) {
+      start = i;
+      break;
+    }
+  }
+  return start < 0 ? [] : lines.slice(start).slice(-max);
 }
 
 /**

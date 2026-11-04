@@ -5,6 +5,7 @@ import {
   findNewestInstaller,
   isArchivedInstallerPath,
   isTrustedSender,
+  lastInstallRun,
   parseArchiveFileName,
   parseLogLines,
   resolveRepoPath,
@@ -51,17 +52,23 @@ describe("isArchivedInstallerPath", () => {
 
   it("is case-insensitive about the directory", () => {
     expect(
-      isArchivedInstallerPath(`${ARCHIVE.toUpperCase()}\\x.exe`, ARCHIVE),
+      isArchivedInstallerPath(
+        `${ARCHIVE.toUpperCase()}\\Agent-Canvas-Setup-1.0.0-abc1234.exe`,
+        ARCHIVE,
+      ),
     ).toBe(true);
   });
 
+  const NAME = "Agent-Canvas-Setup-1.0.0-abc1234.exe";
   it.each([
-    `${ARCHIVE}\\..\\evil.exe`,
-    `${ARCHIVE}\\sub\\x.exe`,
-    `${ARCHIVE}-evil\\x.exe`,
+    `${ARCHIVE}\\..\\${NAME}`,
+    `${ARCHIVE}\\sub\\${NAME}`,
+    `${ARCHIVE}-evil\\${NAME}`,
     "C:\\Windows\\System32\\cmd.exe",
+    `${ARCHIVE}\\x.exe`,
+    `${ARCHIVE}\\OpenHands-Agent-Canvas-Setup-1.0.0.exe`,
     `${ARCHIVE}\\x.ps1`,
-    `${ARCHIVE}\\x.exe.bat`,
+    `${ARCHIVE}\\${NAME}.bat`,
     ARCHIVE,
     "",
     `${ARCHIVE}\\x\0.exe`,
@@ -214,5 +221,37 @@ describe("isTrustedSender", () => {
     { senderUrl: undefined },
   ])("rejects %j", (patch) => {
     expect(isTrustedSender({ ...base, ...patch })).toBe(false);
+  });
+});
+
+describe("lastInstallRun", () => {
+  const log = [
+    "2026-11-01 10:00:00  helper started: installer=A appPid=1",
+    "2026-11-01 10:00:09  installer exit code: 0",
+    "2026-11-01 10:00:11  helper done",
+    "",
+    "2026-11-02 10:00:00  helper started: installer=B appPid=2",
+    "2026-11-02 10:01:00  ABORT: app (pid 2) still running after 60 s",
+    "2026-11-02 10:01:02  helper done",
+  ].join("\r\n");
+
+  it("returns only the most recent run", () => {
+    const run = lastInstallRun(log);
+    expect(run).toHaveLength(3);
+    expect(run[0]).toContain("installer=B");
+    expect(run[2]).toContain("helper done");
+  });
+
+  it("caps the number of lines", () => {
+    expect(lastInstallRun(log, 2)).toEqual([
+      "2026-11-02 10:01:00  ABORT: app (pid 2) still running after 60 s",
+      "2026-11-02 10:01:02  helper done",
+    ]);
+  });
+
+  it("is empty without a helper run", () => {
+    expect(lastInstallRun("")).toEqual([]);
+    expect(lastInstallRun(undefined)).toEqual([]);
+    expect(lastInstallRun("some other line")).toEqual([]);
   });
 });

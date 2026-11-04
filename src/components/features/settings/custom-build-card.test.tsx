@@ -21,8 +21,22 @@ const baseStatus: SelfUpdateStatus = {
   headSha: "bbbbbbbbbb2222",
   clean: true,
   pendingCommits: ["bbbbbbbbbb add a thing"],
+  pendingCommitsError: null,
+  lastInstall: [],
   build: { running: false, log: [], result: null },
 };
+
+function archiveEntry(sha: string, mtimeMs: number) {
+  const name = `Agent-Canvas-Setup-1.0.0-${sha}.exe`;
+  return {
+    path: `C:\\x\\AgentCanvasBuilds\\${name}`,
+    name,
+    mtimeMs,
+    size: 1,
+    version: "1.0.0",
+    sha,
+  };
+}
 
 function installBridge(
   status: Partial<SelfUpdateStatus> = {},
@@ -132,5 +146,75 @@ describe("CustomBuildCard", () => {
     render(<CustomBuildCard />);
     fireEvent.click(await screen.findByTestId("custom-build-reinstall-button"));
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith(path));
+  });
+
+  it("defaults the rollback to the newest build that is not installed", async () => {
+    // installedSha is aaaaaaaaaa1111; the installed build is the newest archive.
+    const installed = archiveEntry("aaaaaaa", 3);
+    const previous = archiveEntry("ccccccc", 2);
+    installBridge(
+      {},
+      {
+        listArchive: vi.fn().mockResolvedValue({
+          ok: true,
+          archive: [installed, previous, archiveEntry("ddddddd", 1)],
+        }),
+      },
+    );
+    render(<CustomBuildCard />);
+    const select = (await screen.findByTestId(
+      "custom-build-archive-select",
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe(previous.path));
+    expect(select.options[0].textContent).toContain(
+      "SELF_UPDATE$INSTALLED_TAG",
+    );
+    expect(select.options[1].textContent).not.toContain(
+      "SELF_UPDATE$INSTALLED_TAG",
+    );
+  });
+
+  it("says so when the build was cancelled", async () => {
+    installBridge(
+      {},
+      {
+        build: vi.fn().mockResolvedValue({
+          ok: false,
+          cancelled: true,
+          error: "Build cancelled",
+        }),
+      },
+    );
+    render(<CustomBuildCard />);
+    fireEvent.click(await screen.findByTestId("custom-build-build-button"));
+    expect(
+      await screen.findByTestId("custom-build-cancelled"),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("custom-build-failure")).toBeNull();
+  });
+
+  it("keeps Build enabled when only the pending-commit list failed", async () => {
+    installBridge({
+      pendingCommits: [],
+      pendingCommitsError: "fatal: bad revision 'aaaaaaaaaa1111..HEAD'",
+    });
+    render(<CustomBuildCard />);
+    expect(
+      await screen.findByTestId("custom-build-pending-error"),
+    ).toHaveTextContent("bad revision");
+    expect(screen.getByTestId("custom-build-build-button")).toBeEnabled();
+  });
+
+  it("shows the last install attempt from install.log", async () => {
+    installBridge({
+      lastInstall: [
+        "2026-11-04 10:00:00  helper started: installer=X",
+        "2026-11-04 10:00:30  installer exit code: 0",
+      ],
+    });
+    render(<CustomBuildCard />);
+    expect(
+      await screen.findByTestId("custom-build-last-install"),
+    ).toHaveTextContent("installer exit code: 0");
   });
 });

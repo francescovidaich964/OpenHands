@@ -18,6 +18,13 @@ function short(sha: string | null | undefined) {
   return sha ? sha.slice(0, SHORT_SHA) : null;
 }
 
+function isInstalledEntry(
+  entry: SelfUpdateArchiveEntry,
+  installedSha: string | null | undefined,
+) {
+  return Boolean(entry.sha && installedSha?.startsWith(entry.sha));
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-2 text-xs">
@@ -60,8 +67,12 @@ function CustomBuildCardInner() {
       const a = await bridge.listArchive();
       const entries = a.archive ?? [];
       setArchive(entries);
+      // Default to the newest build that is not the installed one: that is
+      // what "go back" means.
+      const fallback =
+        entries.find((e) => !isInstalledEntry(e, s.installedSha)) ?? entries[0];
       setSelectedArchive((cur) =>
-        entries.some((e) => e.path === cur) ? cur : (entries[0]?.path ?? ""),
+        entries.some((e) => e.path === cur) ? cur : (fallback?.path ?? ""),
       );
     },
     [bridge],
@@ -179,8 +190,18 @@ function CustomBuildCardInner() {
             ))}
           </ul>
         ) : (
-          <span className="text-xs text-muted">
-            {t(I18nKey.SELF_UPDATE$UP_TO_DATE)}
+          !status.pendingCommitsError && (
+            <span className="text-xs text-muted">
+              {t(I18nKey.SELF_UPDATE$UP_TO_DATE)}
+            </span>
+          )
+        )}
+        {status.pendingCommitsError && (
+          <span
+            data-testid="custom-build-pending-error"
+            className="break-all text-xs text-muted"
+          >
+            {status.pendingCommitsError}
           </span>
         )}
       </div>
@@ -271,6 +292,12 @@ function CustomBuildCardInner() {
         </div>
       )}
 
+      {result?.cancelled && !building && (
+        <p data-testid="custom-build-cancelled" className="text-xs text-muted">
+          {t(I18nKey.SELF_UPDATE$BUILD_CANCELLED)}
+        </p>
+      )}
+
       {installError && (
         <p
           className="text-xs text-danger"
@@ -298,7 +325,10 @@ function CustomBuildCardInner() {
             >
               {archive.map((e) => (
                 <option key={e.path} value={e.path}>
-                  {`${e.version ?? "?"} Â· ${short(e.sha) ?? "?"} Â· ${new Date(e.mtimeMs).toLocaleString()}`}
+                  {`${e.version ?? "?"} · ${short(e.sha) ?? "?"} · ${new Date(e.mtimeMs).toLocaleString()}`}
+                  {isInstalledEntry(e, status.installedSha)
+                    ? ` (${t(I18nKey.SELF_UPDATE$INSTALLED_TAG)})`
+                    : ""}
                 </option>
               ))}
             </select>
@@ -312,6 +342,16 @@ function CustomBuildCardInner() {
               {t(I18nKey.SELF_UPDATE$REINSTALL)}
             </BrandButton>
           </div>
+        )}
+        {status.lastInstall.length > 0 && (
+          <details data-testid="custom-build-last-install">
+            <summary className="cursor-pointer text-xs font-medium text-contrast">
+              {t(I18nKey.SELF_UPDATE$LAST_INSTALL_LOG)}
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-auto rounded-lg border border-border bg-surface-deep p-2 font-mono text-xs text-muted">
+              {status.lastInstall.join("\n")}
+            </pre>
+          </details>
         )}
       </div>
     </section>

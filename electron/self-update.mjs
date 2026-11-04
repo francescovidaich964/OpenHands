@@ -29,7 +29,10 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
-import { INSTALL_HELPER_PS1 } from "./lib/install-helper-script.mjs";
+import {
+  HELPER_LAUNCHER_PS1,
+  INSTALL_HELPER_PS1,
+} from "./lib/install-helper-script.mjs";
 import {
   ARCHIVE_KEEP,
   BUILD_LOG_MAX_LINES,
@@ -37,6 +40,7 @@ import {
   findNewestInstaller,
   isArchivedInstallerPath,
   isTrustedSender,
+  lastInstallRun,
   parseArchiveFileName,
   parseLogLines,
   resolveRepoPath,
@@ -77,10 +81,19 @@ function readJson(path) {
   }
 }
 
-async function run(cmd, args, cwd) {
+function readText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function run(cmd, args, cwd, env) {
   try {
     const { stdout } = await execFileAsync(cmd, args, {
       cwd,
+      env,
       windowsHide: true,
       maxBuffer: 8 * 1024 * 1024,
     });
@@ -186,6 +199,9 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
       headSha: null,
       clean: null,
       pendingCommits: [],
+      // Display-only problems (listing pending commits) must not block Build.
+      pendingCommitsError: null,
+      lastInstall: lastInstallRun(readText(join(archiveDir, "install.log"))),
       error: null,
       build: {
         running: build.running,
@@ -225,7 +241,7 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
         out.repoPath,
       );
       if (log.ok) out.pendingCommits = parseLogLines(log.stdout);
-      else out.error = log.error;
+      else out.pendingCommitsError = log.error;
     }
     return out;
   });
@@ -262,35 +278,43 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
       build.result = { ok: false, error: `Build exited with code ${code}` };
       return build.result;
     }
-    const outDir = join(repo, "dist-electron");
-    const installer = findNewestInstaller(listDir(outDir), startedMs);
-    if (!installer) {
+    try {
+      const outDir = join(repo, "dist-electron");
+      const installer = findNewestInstaller(listDir(outDir), startedMs);
+      if (!installer) {
+        build.result = {
+          ok: false,
+          error: `No installer written after the build started in ${outDir}`,
+        };
+        return build.result;
+      }
+      const pkg = readJson(join(repo, "package.json"));
+      const version = pkg?.version ?? "unknown";
+      const sha =
+        (
+          await run("git", ["rev-parse", "--short", "HEAD"], repo)
+        ).stdout.trim() || "nosha";
+      mkdirSync(archiveDir, { recursive: true });
+      const dest = join(archiveDir, archiveFileName(version, sha));
+      copyFileSync(join(outDir, installer.name), dest);
+      for (const name of selectArchiveToPrune(
+        listDir(archiveDir),
+        ARCHIVE_KEEP,
+      )) {
+        try {
+          unlinkSync(join(archiveDir, name));
+        } catch {
+          // best-effort: an installer that is in use stays until the next build
+        }
+      }
+      build.result = { ok: true, installerPath: dest, version, sha };
+    } catch (err) {
+      // e.g. the copy into the archive failed (disk full, file locked)
       build.result = {
         ok: false,
-        error: `No installer written after the build started in ${outDir}`,
+        error: `Archiving the installer failed: ${err?.message ?? err}`,
       };
-      return build.result;
     }
-    const pkg = readJson(join(repo, "package.json"));
-    const version = pkg?.version ?? "unknown";
-    const sha =
-      (
-        await run("git", ["rev-parse", "--short", "HEAD"], repo)
-      ).stdout.trim() || "nosha";
-    mkdirSync(archiveDir, { recursive: true });
-    const dest = join(archiveDir, archiveFileName(version, sha));
-    copyFileSync(join(outDir, installer.name), dest);
-    for (const name of selectArchiveToPrune(
-      listDir(archiveDir),
-      ARCHIVE_KEEP,
-    )) {
-      try {
-        unlinkSync(join(archiveDir, name));
-      } catch {
-        // best-effort: an installer that is in use stays until the next build
-      }
-    }
-    build.result = { ok: true, installerPath: dest, version, sha };
     return build.result;
   };
 
@@ -393,32 +417,42 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     const scriptPath = join(tmpdir(), `agent-canvas-install-${Date.now()}.ps1`);
     // BOM so Windows PowerShell 5.1 reads the file as UTF-8.
     writeFileSync(scriptPath, `﻿${INSTALL_HELPER_PS1}`, "utf8");
-    const helper = spawn(
+    const launched = await run(
       "powershell.exe",
       [
         "-NoProfile",
+        "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        scriptPath,
-        "-AppPid",
-        String(process.pid),
-        "-Installer",
-        installerPath,
-        "-AppExe",
-        process.execPath,
-        "-InstallDir",
-        dirname(process.execPath),
-        "-LogFile",
-        join(archiveDir, "install.log"),
+        "-Command",
+        HELPER_LAUNCHER_PS1,
       ],
-      { detached: true, stdio: "ignore", windowsHide: true },
+      undefined,
+      {
+        ...process.env,
+        AC_HELPER_SCRIPT: scriptPath,
+        AC_HELPER_APP_PID: String(process.pid),
+        AC_HELPER_INSTALLER: installerPath,
+        AC_HELPER_APP_EXE: process.execPath,
+        AC_HELPER_INSTALL_DIR: dirname(process.execPath),
+        AC_HELPER_LOG_FILE: join(archiveDir, "install.log"),
+      },
     );
-    helper.unref();
+    const helperPid = Number.parseInt(launched.stdout.trim(), 10);
+    if (!launched.ok || !Number.isInteger(helperPid) || helperPid <= 0) {
+      // Stay open: quitting without a helper would leave the user with no app.
+      try {
+        unlinkSync(scriptPath);
+      } catch {
+        // best-effort
+      }
+      return {
+        ok: false,
+        error: `Could not start the install helper: ${launched.error || launched.stdout.trim() || "no PID"}`,
+      };
+    }
     // before-quit stops the backend stack (see main.mjs) before the process exits.
     setTimeout(() => app.quit(), 200);
-    return { ok: true };
+    return { ok: true, helperPid };
   });
 }

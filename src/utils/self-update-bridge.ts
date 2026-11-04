@@ -29,6 +29,10 @@ export interface SelfUpdateStatus {
   /** null when it could not be determined */
   clean: boolean | null;
   pendingCommits: string[];
+  /** Why pendingCommits could not be listed; informational, does not block Build. */
+  pendingCommitsError: string | null;
+  /** install.log lines of the most recent install attempt (empty if none). */
+  lastInstall: string[];
   build: {
     running: boolean;
     log: string[];
