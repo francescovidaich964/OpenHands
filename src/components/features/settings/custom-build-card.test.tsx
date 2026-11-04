@@ -148,6 +148,34 @@ describe("CustomBuildCard", () => {
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith(path));
   });
 
+  it("disables install buttons while an install is starting, re-enables on failure", async () => {
+    let finish: (v: { ok: boolean; error?: string }) => void = () => {};
+    installBridge(
+      {},
+      {
+        install: vi.fn(
+          () =>
+            new Promise<{ ok: boolean; error?: string }>((r) => {
+              finish = r;
+            }),
+        ),
+        listArchive: vi.fn().mockResolvedValue({
+          ok: true,
+          archive: [archiveEntry("ccccccc", 1)],
+        }),
+      },
+    );
+    render(<CustomBuildCard />);
+    const button = await screen.findByTestId("custom-build-reinstall-button");
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    finish({ ok: false, error: "Could not start the install helper" });
+    expect(
+      await screen.findByTestId("custom-build-install-error"),
+    ).toHaveTextContent("Could not start the install helper");
+    expect(button).toBeEnabled();
+  });
+
   it("defaults the rollback to the newest build that is not installed", async () => {
     // installedSha is aaaaaaaaaa1111; the installed build is the newest archive.
     const installed = archiveEntry("aaaaaaa", 3);

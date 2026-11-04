@@ -50,6 +50,7 @@ function CustomBuildCardInner() {
   const [archive, setArchive] = useState<SelfUpdateArchiveEntry[]>([]);
   const [selectedArchive, setSelectedArchive] = useState("");
   const [installError, setInstallError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   // `adoptBuild`: take the main process's build state (running / log / last
   // result) — on mount, so the card reattaches after navigating away. After a
@@ -99,8 +100,13 @@ function CustomBuildCardInner() {
 
   const install = async (path: string) => {
     setInstallError(null);
+    setInstalling(true);
     const r = await bridge.install(path);
-    if (!r.ok) setInstallError(r.error ?? "");
+    // On success the app is about to quit, so the buttons stay disabled.
+    if (!r.ok) {
+      setInstallError(r.error ?? "");
+      setInstalling(false);
+    }
   };
 
   if (!status) return null;
@@ -109,6 +115,7 @@ function CustomBuildCardInner() {
   const dirty = status.clean === false;
   const canBuild =
     !building &&
+    !installing &&
     !dirty &&
     !status.error &&
     status.gitFound &&
@@ -272,6 +279,7 @@ function CustomBuildCardInner() {
             type="button"
             variant="primary"
             className="w-fit"
+            isDisabled={installing}
             onClick={() => void install(result.installerPath!)}
           >
             {t(I18nKey.SELF_UPDATE$RESTART_TO_INSTALL)}
@@ -336,7 +344,7 @@ function CustomBuildCardInner() {
               testId="custom-build-reinstall-button"
               type="button"
               variant="secondary"
-              isDisabled={!selectedArchive || building}
+              isDisabled={!selectedArchive || building || installing}
               onClick={() => void install(selectedArchive)}
             >
               {t(I18nKey.SELF_UPDATE$REINSTALL)}

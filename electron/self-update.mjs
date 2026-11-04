@@ -2,8 +2,8 @@
  * "Custom build" self-update for the desktop app (fork-only feature).
  *
  * Builds a new installer from the local clone this app was built from
- * (`npm run build:desktop`), archives it, and installs it through a detached
- * PowerShell helper after the app quits. The renderer drives it through the
+ * (`npm run typecheck && npm run build:desktop`), archives it, and installs it
+ * through a PowerShell helper that outlives the app. The renderer drives it through the
  * `agentCanvasSelfUpdate` bridge in preload-main.cjs. Everything here is
  * self-contained so upstream files only need a one-line registration.
  *
@@ -65,6 +65,10 @@ const CHANNEL = {
 
 const LOG_FLUSH_MS = 100;
 const OVERRIDE_FILE = "self-update.json";
+// The vite build strips types without checking them, so a commit with a type
+// error would otherwise build and install fine.
+const BUILD_COMMAND = "npm run typecheck && npm run build:desktop";
+const HELPER_LAUNCH_TIMEOUT_MS = 30_000;
 
 export function getArchiveDir() {
   const base =
@@ -83,17 +87,18 @@ function readJson(path) {
 
 function readText(path) {
   try {
-    return readFileSync(path, "utf8");
+    return readFileSync(path, "utf8").replace(/^\uFEFF/, "");
   } catch {
     return "";
   }
 }
 
-async function run(cmd, args, cwd, env) {
+async function run(cmd, args, cwd, env, timeout = 0) {
   try {
     const { stdout } = await execFileAsync(cmd, args, {
       cwd,
       env,
+      timeout,
       windowsHide: true,
       maxBuffer: 8 * 1024 * 1024,
     });
@@ -293,7 +298,7 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
       const sha =
         (
           await run("git", ["rev-parse", "--short", "HEAD"], repo)
-        ).stdout.trim() || "nosha";
+        ).stdout.trim() || "0000000"; // placeholder still matches the archive-name pattern
       mkdirSync(archiveDir, { recursive: true });
       const dest = join(archiveDir, archiveFileName(version, sha));
       copyFileSync(join(outDir, installer.name), dest);
@@ -337,11 +342,11 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     build.result = null;
     build.startedMs = Date.now();
     const startedMs = build.startedMs;
-    pushLines([`> npm run build:desktop  (${repo})`]);
+    pushLines([`> ${BUILD_COMMAND}  (${repo})`]);
 
     return new Promise((resolvePromise) => {
       // shell:true — on Windows npm is npm.cmd, which spawn() will not run directly.
-      const child = spawn("npm run build:desktop", {
+      const child = spawn(BUILD_COMMAND, {
         cwd: repo,
         shell: true,
         windowsHide: true,
@@ -416,7 +421,7 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     }
     const scriptPath = join(tmpdir(), `agent-canvas-install-${Date.now()}.ps1`);
     // BOM so Windows PowerShell 5.1 reads the file as UTF-8.
-    writeFileSync(scriptPath, `﻿${INSTALL_HELPER_PS1}`, "utf8");
+    writeFileSync(scriptPath, `\uFEFF${INSTALL_HELPER_PS1}`, "utf8");
     const launched = await run(
       "powershell.exe",
       [
@@ -437,6 +442,7 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
         AC_HELPER_INSTALL_DIR: dirname(process.execPath),
         AC_HELPER_LOG_FILE: join(archiveDir, "install.log"),
       },
+      HELPER_LAUNCH_TIMEOUT_MS,
     );
     const helperPid = Number.parseInt(launched.stdout.trim(), 10);
     if (!launched.ok || !Number.isInteger(helperPid) || helperPid <= 0) {

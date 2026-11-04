@@ -38,6 +38,7 @@ function Get-InstallDirProcesses {
 
 Write-Log "helper started: installer=$Installer appPid=$AppPid installDir=$InstallDir"
 $proceed = $true
+$installerHung = $false
 
 # 1. wait for the app, then for anything still running from the install dir
 $deadline = (Get-Date).AddSeconds(60)
@@ -74,6 +75,7 @@ if ($proceed) {
         Write-Log "installer exit code: $($proc.ExitCode)"
       } else {
         Write-Log "installer still running after 10 min (pid $($proc.Id)); not waiting any longer"
+        $installerHung = $true
       }
     } catch {
       Write-Log "installer failed to start: $($_.Exception.Message)"
@@ -86,6 +88,9 @@ Start-Sleep -Seconds 2
 $running = Get-InstallDirProcesses | Where-Object { $_.ProcessName -ieq [IO.Path]::GetFileNameWithoutExtension($AppExe) }
 if ($running) {
   Write-Log ("app already running from the install dir (pid " + (($running | ForEach-Object { $_.Id }) -join ', ') + "); not relaunching")
+} elseif ($installerHung) {
+  # Starting the app against a directory the installer is still rewriting would make things worse.
+  Write-Log "relaunch skipped: the installer is still running; start the app by hand once it is gone"
 } elseif (Test-Path -LiteralPath $AppExe) {
   try {
     Start-Process -FilePath $AppExe
@@ -107,10 +112,12 @@ try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction Stop } catch {
  * would die with the app), but lets their own children break away silently;
  * and `spawn({detached: true})` of powershell.exe was measured to exit 0
  * without running anything. Arguments come in through environment variables
- * (AC_HELPER_*) so no path is ever pasted into code.
+ * (AC_HELPER_*) so no path is ever pasted into code. A helper that dies at
+ * once (e.g. parameter binding) is reported as a failure so the app stays open.
  */
 export const HELPER_LAUNCHER_PS1 = String.raw`$ErrorActionPreference = 'Stop'
-$q = { param($s) '"' + $s + '"' }
+# Double a trailing backslash so it cannot escape the closing quote.
+$q = { param($s) '"' + ($s -replace '\\$', '\\') + '"' }
 $a = @(
   '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
   '-File', (& $q $env:AC_HELPER_SCRIPT),
@@ -121,5 +128,10 @@ $a = @(
   '-LogFile', (& $q $env:AC_HELPER_LOG_FILE)
 )
 $p = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList $a
+$null = $p.Handle
+if ($p.WaitForExit(3000)) {
+  [Console]::Error.WriteLine("install helper exited immediately (code $($p.ExitCode))")
+  exit 1
+}
 Write-Output $p.Id
 `;
