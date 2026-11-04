@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 import { BrandButton } from "#/components/features/settings/brand-button";
@@ -30,7 +30,7 @@ function Row({ label, value }: { label: string; value: string }) {
 /**
  * Fork-only "Custom build" card: builds a new installer from the local clone
  * and installs it. Rendered only where the Electron bridge exists (see
- * CustomBuildCard below) â€” the same frontend also runs in a plain browser.
+ * CustomBuildCard below) — the same frontend also runs in a plain browser.
  */
 function CustomBuildCardInner() {
   const { t } = useTranslation("openhands");
