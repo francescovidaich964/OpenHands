@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld("agentCanvasSelfUpdate", {
   install: (installerPath) =>
     ipcRenderer.invoke("self-update:install", installerPath),
   listArchive: () => ipcRenderer.invoke("self-update:list-archive"),
+  /** `git fetch` of this branch's tracking ref only. Resolves when it is done. */
+  fetch: () => ipcRenderer.invoke("self-update:fetch"),
+  /** `git merge --ff-only @{upstream}`; never a rebase or a merge commit. */
+  pull: () => ipcRenderer.invoke("self-update:pull"),
   /** Subscribe to build output batches: cb(string[]). Returns an unsubscribe fn. */
   onLog(cb) {
     const handler = (_event, lines) => cb(lines);

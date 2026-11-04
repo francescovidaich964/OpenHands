@@ -154,6 +154,67 @@ export function parseLogLines(stdout) {
 }
 
 /**
+ * `git rev-list --left-right --count A...B` output — the tab-separated pair git
+ * prints, `{ left, right }` = commits only reachable from A / only from B.
+ * Null for anything else, which is how a failed comparison (an unknown revision)
+ * reaches the caller: without counts nothing may be claimed.
+ */
+export function parseLeftRight(stdout) {
+  const m = /^(\d+)\t(\d+)$/.exec(String(stdout ?? "").trim());
+  return m ? { left: Number(m[1]), right: Number(m[2]) } : null;
+}
+
+/**
+ * How the installed build relates to the clone's HEAD.
+ *
+ * @param {{installedSha: string|null,
+ *   counts: {left: number, right: number}|null}} facts `counts` of
+ *   `git rev-list --left-right --count <installed>...HEAD`: left = commits only
+ *   in the installed build, right = commits only in HEAD. Null when the command
+ *   failed, which is also the case for an sha the clone does not contain.
+ * @returns {"same"|"behind"|"ahead"|"diverged"|"unknown"}
+ */
+export function commitRelationship({ installedSha, counts }) {
+  if (!installedSha || !counts) return "unknown";
+  if (counts.left === 0) return counts.right === 0 ? "same" : "behind";
+  return counts.right === 0 ? "ahead" : "diverged";
+}
+
+/**
+ * Why `git merge --ff-only @{upstream}` is refused right now, or null when it is
+ * a fast-forward waiting to happen. The card disables Pull on any non-null answer
+ * and shows it, so the wording is user-facing (as in upstream-sync's guards).
+ * The order is the order the reasons are reported in.
+ *
+ * @param {{clean: boolean|null, buildRunning: boolean, operation: string|null,
+ *   upstream: string|null, unpushed: number|null, newOnRemote: number|null}} facts
+ */
+export function pullRefusal({
+  clean,
+  buildRunning,
+  operation,
+  upstream,
+  unpushed,
+  newOnRemote,
+}) {
+  if (operation) {
+    return `A ${operation} is in progress — resolve or abort it first.`;
+  }
+  if (clean !== true) return "The working tree has uncommitted changes.";
+  if (buildRunning) return "A build is running — wait for it to finish.";
+  if (!upstream)
+    return "This branch has no upstream tracking branch to pull from.";
+  if (unpushed === null || newOnRemote === null) {
+    return `The branch could not be compared with ${upstream}.`;
+  }
+  if (unpushed > 0 && newOnRemote > 0) {
+    return `Your branch and ${upstream} have diverged — only a fast-forward is ever done.`;
+  }
+  if (newOnRemote === 0) return `No new commits on ${upstream}.`;
+  return null;
+}
+
+/**
  * Which repo the app should treat as its clone: the userData override file's
  * `repoPath` wins over the path baked in at build time.
  */

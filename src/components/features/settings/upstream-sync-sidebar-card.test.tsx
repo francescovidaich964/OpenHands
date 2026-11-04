@@ -58,6 +58,8 @@ function installBridge(next: SyncPayload) {
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     install: vi.fn().mockResolvedValue({ ok: true }),
     listArchive: vi.fn().mockResolvedValue({ ok: true }),
+    fetch: vi.fn().mockResolvedValue({ ok: true }),
+    pull: vi.fn().mockResolvedValue({ ok: true }),
     onLog: vi.fn().mockReturnValue(() => {}),
     syncState: vi.fn().mockResolvedValue(next),
     syncCheck,

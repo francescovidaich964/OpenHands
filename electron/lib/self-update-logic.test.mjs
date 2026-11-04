@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   archiveFileName,
+  commitRelationship,
   findNewestInstaller,
   isArchivedInstallerPath,
   isTrustedSender,
   lastInstallRun,
   parseArchiveFileName,
+  parseLeftRight,
   parseLogLines,
+  pullRefusal,
   resolveRepoPath,
   selectArchiveToPrune,
   sortArchive,
@@ -275,5 +278,112 @@ describe("lastInstallRun", () => {
     expect(lastInstallRun("")).toEqual([]);
     expect(lastInstallRun(undefined)).toEqual([]);
     expect(lastInstallRun("some other line")).toEqual([]);
+  });
+});
+
+describe("parseLeftRight", () => {
+  it("reads git's tab-separated pair", () => {
+    expect(parseLeftRight("0\t2\n")).toEqual({ left: 0, right: 2 });
+    expect(parseLeftRight("12\t1")).toEqual({ left: 12, right: 1 });
+    expect(parseLeftRight("0\t0")).toEqual({ left: 0, right: 0 });
+  });
+
+  it.each(["", undefined, null, "not a number\t1", "1 1", "1\t2\t3"])(
+    "is null for %j (the command did not answer with a count)",
+    (s) => {
+      expect(parseLeftRight(s)).toBeNull();
+    },
+  );
+});
+
+describe("commitRelationship", () => {
+  it("says same when neither side has its own commits", () => {
+    expect(
+      commitRelationship({ installedSha: "a1", counts: { left: 0, right: 0 } }),
+    ).toBe("same");
+  });
+
+  it("says behind when only HEAD has commits the build lacks", () => {
+    expect(
+      commitRelationship({ installedSha: "a1", counts: { left: 0, right: 4 } }),
+    ).toBe("behind");
+  });
+
+  it("says ahead when only the installed build has commits HEAD lacks", () => {
+    // The reported bug: a build from a feature branch stayed 4 commits ahead of
+    // HEAD while the card claimed "matches the clone".
+    expect(
+      commitRelationship({ installedSha: "a1", counts: { left: 4, right: 0 } }),
+    ).toBe("ahead");
+  });
+
+  it("says diverged when both sides have their own commits", () => {
+    expect(
+      commitRelationship({ installedSha: "a1", counts: { left: 2, right: 3 } }),
+    ).toBe("diverged");
+  });
+
+  it("is unknown with no installed sha or when git could not compare", () => {
+    expect(
+      commitRelationship({ installedSha: null, counts: { left: 0, right: 0 } }),
+    ).toBe("unknown");
+    // An sha the clone does not contain: `rev-list` fails, so there are no counts.
+    expect(commitRelationship({ installedSha: "a1", counts: null })).toBe(
+      "unknown",
+    );
+  });
+});
+
+describe("pullRefusal", () => {
+  const ok = {
+    clean: true,
+    buildRunning: false,
+    operation: null,
+    upstream: "origin/main",
+    unpushed: 0,
+    newOnRemote: 2,
+  };
+
+  it("allows a plain fast-forward", () => {
+    expect(pullRefusal(ok)).toBeNull();
+  });
+
+  it("refuses a dirty tree", () => {
+    expect(pullRefusal({ ...ok, clean: false })).toMatch(/uncommitted/i);
+    // "could not be determined" is not "clean": refuse that too.
+    expect(pullRefusal({ ...ok, clean: null })).toMatch(/uncommitted/i);
+  });
+
+  it("refuses a branch with no tracking ref", () => {
+    expect(pullRefusal({ ...ok, upstream: null })).toMatch(/upstream/i);
+  });
+
+  it("refuses when a build is running", () => {
+    expect(pullRefusal({ ...ok, buildRunning: true })).toMatch(
+      /build is running/i,
+    );
+  });
+
+  it.each(["rebase", "merge", "cherry-pick", "revert"])(
+    "refuses while a %s is in progress",
+    (operation) => {
+      expect(pullRefusal({ ...ok, operation })).toMatch(
+        new RegExp(operation, "i"),
+      );
+    },
+  );
+
+  it("refuses a diverged branch: never anything but a fast-forward", () => {
+    expect(pullRefusal({ ...ok, unpushed: 1 })).toMatch(/diverg/i);
+  });
+
+  it("refuses when there is nothing new to pull", () => {
+    expect(pullRefusal({ ...ok, newOnRemote: 0 })).toMatch(/no new commits/i);
+  });
+
+  it("names the first blocker when several apply", () => {
+    expect(pullRefusal({ ...ok, clean: false, buildRunning: true })).toBe(
+      pullRefusal({ ...ok, clean: false }),
+    );
   });
 });

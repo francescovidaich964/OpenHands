@@ -6,6 +6,7 @@ import { I18nKey } from "#/i18n/declaration";
 import { UpstreamSyncPanel } from "#/components/features/settings/upstream-sync-panel";
 import {
   getSelfUpdateBridge,
+  type InstalledRelation,
   type SelfUpdateArchiveEntry,
   type SelfUpdateBuildResult,
   type SelfUpdateStatus,
@@ -16,8 +17,23 @@ const MAX_LOG_LINES = 2000;
 const BUILD_POLL_MS = 5000;
 /** Polls with no build state before the card stops believing a build is running. */
 const MAX_BUILD_WAIT_POLLS = 5;
+/**
+ * Local git is re-read on this timer and on window focus: the card used to read it
+ * once on mount, so a PR merged on GitHub appeared nowhere until the app restarted.
+ * The remote fetch is throttled in the main process, not here.
+ */
+const STATUS_POLL_MS = 30_000;
 const FAILURE_LOG_LINES = 50;
 const SHORT_SHA = 10;
+
+/** One honest sentence per relationship; "matches" only ever for `same`. */
+const RELATION_KEY: Record<InstalledRelation, I18nKey> = {
+  same: I18nKey.SELF_UPDATE$UP_TO_DATE,
+  behind: I18nKey.SELF_UPDATE$REL_BEHIND,
+  ahead: I18nKey.SELF_UPDATE$REL_AHEAD,
+  diverged: I18nKey.SELF_UPDATE$REL_DIVERGED,
+  unknown: I18nKey.SELF_UPDATE$REL_UNKNOWN,
+};
 
 function short(sha: string | null | undefined) {
   return sha ? sha.slice(0, SHORT_SHA) : null;
@@ -39,6 +55,34 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** A `git log --oneline` list, or nothing when that direction is empty. */
+function CommitList({
+  testId,
+  label,
+  lines,
+}: {
+  testId: string;
+  label: string;
+  lines: string[];
+}) {
+  if (lines.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-text-dim">{label}</span>
+      <ul
+        data-testid={testId}
+        className="flex flex-col gap-0.5 font-mono text-xs text-muted"
+      >
+        {lines.map((c) => (
+          <li key={c} className="break-all">
+            {c}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * Fork-only "Custom build" card: builds a new installer from the local clone
  * and installs it. Rendered only where the Electron bridge exists (see
@@ -56,6 +100,10 @@ function CustomBuildCardInner() {
   const [selectedArchive, setSelectedArchive] = useState("");
   const [installError, setInstallError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  /** Why the last Check or Pull failed, shown in the remote block. */
+  const [remoteMessage, setRemoteMessage] = useState<string | null>(null);
+  const [checkingRemote, setCheckingRemote] = useState(false);
+  const [pulling, setPulling] = useState(false);
 
   // `adoptBuild`: take the main process's build state (running / log / last
   // result) — on mount, so the card reattaches after navigating away. After a
@@ -123,6 +171,44 @@ function CustomBuildCardInner() {
     return () => window.clearInterval(id);
   }, [building, refresh]);
 
+  // The clone moves while this card is open — a Pull elsewhere, a PR merged on
+  // GitHub, the sync starting a build. Local git is cheap, so re-read on a timer
+  // and when the window gets its focus back. The remote is not contacted here: the
+  // main process fetches at most once per FETCH_MAX_AGE_MS, so this stays honest
+  // about the network.
+  useEffect(() => {
+    const poll = () => void refresh(false);
+    const id = window.setInterval(poll, STATUS_POLL_MS);
+    const onFocus = () => poll();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refresh]);
+
+  /** `git fetch` of the tracking ref, then a re-read: that is what Check means. */
+  const check = async () => {
+    setCheckingRemote(true);
+    setRemoteMessage(null);
+    const r = await bridge.fetch();
+    if (!r.ok) setRemoteMessage(r.error ?? "");
+    setCheckingRemote(false);
+    await refresh(false);
+  };
+
+  /** Fast-forward only; the main process refuses anything else and says why. */
+  const pull = async () => {
+    setPulling(true);
+    setRemoteMessage(null);
+    const r = await bridge.pull();
+    if (!r.ok) setRemoteMessage(r.error ?? "");
+    setPulling(false);
+    // The clone just moved: HEAD, the pending commits and the relation to the
+    // installed build are all different now.
+    await refresh(false);
+  };
+
   const build = async () => {
     setBuilding(true);
     setResult(null);
@@ -150,6 +236,9 @@ function CustomBuildCardInner() {
   if (!status.supported) return null;
 
   const dirty = status.clean === false;
+  // Pull is offered only for a waiting fast-forward: the main process answers
+  // null in that case and the reason otherwise, which is shown under the button.
+  const canPull = !status.pullError && !pulling && !checkingRemote;
   const canBuild =
     !building &&
     !installing &&
@@ -220,32 +309,132 @@ function CustomBuildCardInner() {
 
       <div className="flex flex-col gap-1">
         <span className="text-xs font-medium text-contrast">
-          {t(I18nKey.SELF_UPDATE$PENDING_COMMITS)}
+          {t(I18nKey.SELF_UPDATE$COMMIT_STATUS)}
         </span>
-        {status.pendingCommits.length > 0 ? (
-          <ul
-            data-testid="custom-build-pending-commits"
-            className="flex flex-col gap-0.5 font-mono text-xs text-muted"
+        <span
+          data-testid="custom-build-relation"
+          className="text-xs text-contrast"
+        >
+          {t(RELATION_KEY[status.installedRelation])}
+        </span>
+        {status.installedRelationError && (
+          <span
+            data-testid="custom-build-relation-error"
+            className="break-all text-xs text-muted"
           >
-            {status.pendingCommits.map((c) => (
-              <li key={c} className="break-all">
-                {c}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          !status.pendingCommitsError && (
-            <span className="text-xs text-muted">
-              {t(I18nKey.SELF_UPDATE$UP_TO_DATE)}
-            </span>
-          )
+            {status.installedRelationError}
+          </span>
         )}
+        <CommitList
+          testId="custom-build-pending-commits"
+          label={t(I18nKey.SELF_UPDATE$PENDING_COMMITS)}
+          lines={status.pendingCommits}
+        />
+        <CommitList
+          testId="custom-build-installed-only"
+          label={t(I18nKey.SELF_UPDATE$INSTALLED_ONLY)}
+          lines={status.installedOnlyCommits}
+        />
         {status.pendingCommitsError && (
           <span
             data-testid="custom-build-pending-error"
             className="break-all text-xs text-muted"
           >
             {status.pendingCommitsError}
+          </span>
+        )}
+        {status.installedOnlyError && (
+          <span
+            data-testid="custom-build-installed-only-error"
+            className="break-all text-xs text-muted"
+          >
+            {status.installedOnlyError}
+          </span>
+        )}
+      </div>
+
+      <div data-testid="custom-build-remote" className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-contrast">
+          {status.upstream
+            ? t(I18nKey.SELF_UPDATE$REMOTE_TITLE, { upstream: status.upstream })
+            : t(I18nKey.SELF_UPDATE$NO_UPSTREAM)}
+        </span>
+        {status.remoteError && (
+          <span
+            data-testid="custom-build-remote-error"
+            className="break-all text-xs text-muted"
+          >
+            {status.remoteError}
+          </span>
+        )}
+        {status.newOnRemoteCommits.length > 0 ? (
+          <ul
+            data-testid="custom-build-remote-commits"
+            className="flex flex-col gap-0.5 font-mono text-xs text-muted"
+          >
+            {status.newOnRemoteCommits.map((c) => (
+              <li key={c} className="break-all">
+                {c}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          status.upstream &&
+          status.newOnRemote === 0 && (
+            <span
+              data-testid="custom-build-remote-none"
+              className="text-xs text-muted"
+            >
+              {t(I18nKey.SELF_UPDATE$REMOTE_NONE)}
+            </span>
+          )
+        )}
+        <CommitList
+          testId="custom-build-unpushed-commits"
+          label={t(I18nKey.SELF_UPDATE$NOT_PUSHED)}
+          lines={status.unpushedCommits}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <BrandButton
+            testId="custom-build-check-button"
+            type="button"
+            variant="secondary"
+            isDisabled={checkingRemote}
+            onClick={() => void check()}
+          >
+            {t(I18nKey.SELF_UPDATE$CHECK_FOR_NEW_COMMITS)}
+          </BrandButton>
+          <BrandButton
+            testId="custom-build-pull-button"
+            type="button"
+            variant="secondary"
+            isDisabled={!canPull}
+            onClick={() => void pull()}
+          >
+            {t(I18nKey.SELF_UPDATE$PULL)}
+          </BrandButton>
+        </div>
+        {status.pullError && (
+          <span
+            data-testid="custom-build-pull-hint"
+            className="text-xs text-muted"
+          >
+            {status.pullError}
+          </span>
+        )}
+        {remoteMessage && (
+          <span
+            data-testid="custom-build-remote-message"
+            className="break-all text-xs text-danger"
+          >
+            {remoteMessage}
+          </span>
+        )}
+        {status.lastFetchMs && (
+          <span className="text-xs text-text-dim">
+            {t(I18nKey.SELF_UPDATE$LAST_CHECKED, {
+              time: new Date(status.lastFetchMs).toLocaleString(),
+            })}
           </span>
         )}
       </div>

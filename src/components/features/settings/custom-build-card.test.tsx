@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  InstalledRelation,
   SelfUpdateBridge,
   SelfUpdateStatus,
   SyncPayload,
@@ -33,6 +34,23 @@ const baseStatus: SelfUpdateStatus = {
   clean: true,
   pendingCommits: ["bbbbbbbbbb add a thing"],
   pendingCommitsError: null,
+  // The clone is ahead of the installed build: the ordinary "there is work to
+  // install" state. Per-relation cases are covered below.
+  installedRelation: "behind",
+  installedOnlyCommits: [],
+  installedOnlyError: null,
+  installedRelationError: null,
+  gitOperation: null,
+  upstream: "origin/custom",
+  newOnRemote: 0,
+  unpushed: 0,
+  newOnRemoteCommits: [],
+  unpushedCommits: [],
+  remoteError: null,
+  // Nothing new on the remote, so Pull has nothing to fast-forward to.
+  pullError: "No new commits on origin/custom.",
+  lastFetchMs: null,
+  fetchError: null,
   lastInstall: [],
   build: { running: false, log: [], result: null },
 };
@@ -65,6 +83,8 @@ function installBridge(
     cancel: vi.fn().mockResolvedValue({ ok: true }),
     install: vi.fn().mockResolvedValue({ ok: true }),
     listArchive: vi.fn().mockResolvedValue({ ok: true, archive: [] }),
+    fetch: vi.fn().mockResolvedValue({ ok: true }),
+    pull: vi.fn().mockResolvedValue({ ok: true }),
     onLog: vi.fn().mockReturnValue(() => {}),
     syncState: vi.fn().mockResolvedValue(unsupportedSync),
     syncCheck: vi.fn().mockResolvedValue(unsupportedSync),
@@ -431,6 +451,210 @@ describe("CustomBuildCard", () => {
         screen.queryByTestId("custom-build-cancel-button"),
       ).not.toBeInTheDocument();
       expect(screen.getByTestId("custom-build-build-button")).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("CustomBuildCard installed build vs clone", () => {
+  // The reported bug: an installed build that was 4 commits AHEAD of HEAD (built
+  // from a feature branch) read "The installed build matches the clone", because
+  // only installed..HEAD was listed. Each relation must say its own truth.
+  it.each([
+    ["same", "SELF_UPDATE$UP_TO_DATE"],
+    ["behind", "SELF_UPDATE$REL_BEHIND"],
+    ["ahead", "SELF_UPDATE$REL_AHEAD"],
+    ["diverged", "SELF_UPDATE$REL_DIVERGED"],
+    ["unknown", "SELF_UPDATE$REL_UNKNOWN"],
+  ] as Array<[InstalledRelation, string]>)(
+    "states the %s relationship in one sentence",
+    async (relation, key) => {
+      installBridge({ installedRelation: relation });
+      render(<CustomBuildCard />);
+      expect(
+        await screen.findByTestId("custom-build-relation"),
+      ).toHaveTextContent(key);
+    },
+  );
+
+  it("says only UP_TO_DATE for same, never for ahead", async () => {
+    installBridge({
+      installedRelation: "ahead",
+      pendingCommits: [],
+      installedOnlyCommits: ["ca34073 l2 built from a feature branch"],
+    });
+    render(<CustomBuildCard />);
+    expect(await screen.findByTestId("custom-build-card")).toBeInTheDocument();
+    expect(
+      screen.queryByText("SELF_UPDATE$UP_TO_DATE"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("custom-build-installed-only")).toHaveTextContent(
+      "built from a feature branch",
+    );
+  });
+
+  it("lists both directions when the build and the clone diverged", async () => {
+    installBridge({
+      installedRelation: "diverged",
+      pendingCommits: ["bbbbbbbbbb add a thing"],
+      installedOnlyCommits: ["ca34073 only in the build"],
+    });
+    render(<CustomBuildCard />);
+    expect(
+      await screen.findByTestId("custom-build-pending-commits"),
+    ).toHaveTextContent("add a thing");
+    expect(screen.getByTestId("custom-build-installed-only")).toHaveTextContent(
+      "only in the build",
+    );
+  });
+
+  it("explains an installed commit the clone does not have", async () => {
+    installBridge({
+      installedRelation: "unknown",
+      pendingCommits: [],
+      installedRelationError: "fatal: bad object deadbeef",
+    });
+    render(<CustomBuildCard />);
+    expect(
+      await screen.findByTestId("custom-build-relation-error"),
+    ).toHaveTextContent("bad object deadbeef");
+  });
+
+  it("keeps Build enabled when only the installed-only list failed", async () => {
+    installBridge({
+      installedRelation: "diverged",
+      installedOnlyError: "fatal: bad object",
+    });
+    render(<CustomBuildCard />);
+    expect(await screen.findByTestId("custom-build-card")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-build-build-button")).toBeEnabled();
+  });
+});
+
+describe("CustomBuildCard remote commits and Pull", () => {
+  it("lists new commits on the tracking ref and enables Pull for a fast-forward", async () => {
+    installBridge({
+      installedRelation: "behind",
+      newOnRemote: 2,
+      newOnRemoteCommits: ["r1 from github", "r2 a merged PR"],
+      pullError: null,
+    });
+    render(<CustomBuildCard />);
+    expect(
+      await screen.findByTestId("custom-build-remote-commits"),
+    ).toHaveTextContent("a merged PR");
+    expect(screen.getByTestId("custom-build-pull-button")).toBeEnabled();
+    expect(
+      screen.queryByTestId("custom-build-pull-hint"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says there is nothing new, and shows what is not pushed", async () => {
+    installBridge({
+      unpushed: 1,
+      unpushedCommits: ["l1 local only"],
+    });
+    render(<CustomBuildCard />);
+    expect(await screen.findByTestId("custom-build-card")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-build-remote-none")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("custom-build-unpushed-commits"),
+    ).toHaveTextContent("local only");
+    // baseStatus has newOnRemote 0, so Pull has nothing to do.
+    expect(screen.getByTestId("custom-build-pull-button")).toBeDisabled();
+  });
+
+  it("says so when the branch has no tracking ref", async () => {
+    installBridge({
+      upstream: null,
+      newOnRemote: null,
+      unpushed: null,
+      pullError: "This branch has no upstream tracking branch to pull from.",
+    });
+    render(<CustomBuildCard />);
+    expect(await screen.findByTestId("custom-build-remote")).toHaveTextContent(
+      "SELF_UPDATE$NO_UPSTREAM",
+    );
+    expect(screen.getByTestId("custom-build-pull-button")).toBeDisabled();
+    expect(screen.getByTestId("custom-build-pull-hint")).toHaveTextContent(
+      "no upstream",
+    );
+  });
+
+  it("checks for new commits and re-reads the clone afterwards", async () => {
+    const bridge = installBridge();
+    render(<CustomBuildCard />);
+    fireEvent.click(await screen.findByTestId("custom-build-check-button"));
+    await waitFor(() => expect(bridge.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(bridge.status).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a failed fetch in the remote block", async () => {
+    installBridge(
+      {},
+      {
+        fetch: vi
+          .fn()
+          .mockResolvedValue({ ok: false, error: "could not read Username" }),
+      },
+    );
+    render(<CustomBuildCard />);
+    fireEvent.click(await screen.findByTestId("custom-build-check-button"));
+    expect(
+      await screen.findByTestId("custom-build-remote-message"),
+    ).toHaveTextContent("could not read Username");
+  });
+
+  it("pulls, then re-reads the clone", async () => {
+    const bridge = installBridge(
+      {
+        pullError: null,
+        newOnRemote: 1,
+        newOnRemoteCommits: ["r1 a merged PR"],
+      },
+      { pull: vi.fn().mockResolvedValue({ ok: true, output: "Fast-forward" }) },
+    );
+    render(<CustomBuildCard />);
+    fireEvent.click(await screen.findByTestId("custom-build-pull-button"));
+    await waitFor(() => expect(bridge.pull).toHaveBeenCalled());
+    await waitFor(() => expect(bridge.status).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows why a pull was refused even though the button was enabled", async () => {
+    installBridge(
+      { pullError: null, newOnRemote: 1 },
+      {
+        pull: vi.fn().mockResolvedValue({
+          ok: false,
+          error: "fatal: Not possible to fast-forward, aborting.",
+        }),
+      },
+    );
+    render(<CustomBuildCard />);
+    fireEvent.click(await screen.findByTestId("custom-build-pull-button"));
+    expect(
+      await screen.findByTestId("custom-build-remote-message"),
+    ).toHaveTextContent("Not possible to fast-forward");
+  });
+
+  it("re-reads the clone on a timer and when the window is focused again", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = installBridge();
+      render(<CustomBuildCard />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(bridge.status).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(bridge.status).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(bridge.status).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

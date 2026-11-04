@@ -34,15 +34,19 @@ import {
   HELPER_LAUNCHER_PS1,
   INSTALL_HELPER_PS1,
 } from "./lib/install-helper-script.mjs";
+import { repoOperation } from "./lib/repo-state.mjs";
 import {
   BUILD_LOG_MAX_LINES,
   archiveFileName,
+  commitRelationship,
   findNewestInstaller,
   isArchivedInstallerPath,
   isTrustedSender,
   lastInstallRun,
   parseArchiveFileName,
+  parseLeftRight,
   parseLogLines,
+  pullRefusal,
   resolveRepoPath,
   selectArchiveToPrune,
   sortArchive,
@@ -64,10 +68,21 @@ const CHANNEL = {
   cancel: "self-update:cancel",
   install: "self-update:install",
   listArchive: "self-update:list-archive",
+  fetch: "self-update:fetch",
+  pull: "self-update:pull",
   log: "self-update:log",
 };
 
 const LOG_FLUSH_MS = 100;
+/**
+ * The card polls `status` every 30 s; that is local git only. The remote is
+ * contacted by the Check button or once per this window, never concurrently.
+ */
+export const FETCH_MAX_AGE_MS = 10 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 5 * 60 * 1000;
+const PULL_TIMEOUT_MS = 5 * 60 * 1000;
+/** Commit lines listed per direction on the card; the count is never capped. */
+export const MAX_COMMIT_LINES = 20;
 export const OVERRIDE_FILE = "self-update.json";
 /** Next to the installers: `{ "<installer name>": { branch, builtMs } }`. */
 const ARCHIVE_INDEX_FILE = "archive-index.json";
@@ -128,6 +143,18 @@ export async function run(cmd, args, cwd, env, timeout = 0) {
       error: err?.stderr?.trim?.() || err?.message || String(err),
     };
   }
+}
+
+/**
+ * A non-interactive environment for every git call: nothing may open an editor
+ * or ask for credentials in a background process. Shared with the upstream sync.
+ */
+export function gitEnv() {
+  return {
+    ...process.env,
+    GIT_EDITOR: "true",
+    GIT_TERMINAL_PROMPT: "0",
+  };
 }
 
 /** Whether `cmd` resolves on PATH. */
@@ -213,6 +240,170 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     );
 
   // ── status ──────────────────────────────────────────────────────────────────
+  /** In-memory only: the remote is not app state, and this is display context. */
+  let lastFetchMs = 0;
+  let fetchError = null;
+  /** @type {Promise<string|null>|null} Why the fetch that is running will fail (null = fine). */
+  let fetchInFlight = null;
+
+  /** git's own marker files: a rebase/merge/cherry-pick left open in the clone. */
+  const repoOperationOf = (repo) =>
+    repoOperation({ repo, env: gitEnv(), run, existsSync, readText });
+
+  /** The branch's tracking ref ("origin/main"), or null when it has none. */
+  async function trackingRef(repo) {
+    const r = await run(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+      repo,
+      gitEnv(),
+    );
+    const name = r.ok ? r.stdout.trim() : "";
+    return name === "" || name === "@{upstream}" ? null : name;
+  }
+
+  /**
+   * One fetch, no matter how many callers want it right now: `status` runs on a
+   * timer and the Check button runs on a click.
+   * @returns the error text, or null when the fetch worked.
+   */
+  const fetchUpstreamOnce = (repo, upstream) => {
+    if (!fetchInFlight) {
+      fetchInFlight = (async () => {
+        const i = upstream.indexOf("/");
+        // No --tags (one clashing local tag makes git refuse the whole fetch) and
+        // no --prune: this brings one branch's ref up to date and touches nothing
+        // else. remote/branch are git's own naming for a tracking ref.
+        // shortcut: a clone with a custom fetch refspec would need
+        // branch.<name>.remote instead; it would show up as a fetch error.
+        const r =
+          i > 0
+            ? await run(
+                "git",
+                ["fetch", upstream.slice(0, i), upstream.slice(i + 1)],
+                repo,
+                gitEnv(),
+                FETCH_TIMEOUT_MS,
+              )
+            : {
+                ok: false,
+                error: `Not a remote/branch tracking ref: ${upstream}`,
+              };
+        fetchError = r.ok ? null : r.error || "git fetch failed";
+        lastFetchMs = Date.now();
+        return fetchError;
+      })().finally(() => {
+        fetchInFlight = null;
+      });
+    }
+    return fetchInFlight;
+  };
+
+  /**
+   * What the tracking ref holds that HEAD does not and the other way round. Every
+   * revision is the literal `@{upstream}` — no name from the renderer reaches git.
+   */
+  async function remoteFacts(repo, upstream) {
+    const [counts, incoming, outgoing] = await Promise.all([
+      run(
+        "git",
+        ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        repo,
+        gitEnv(),
+      ),
+      run(
+        "git",
+        [
+          "log",
+          "--oneline",
+          "-n",
+          String(MAX_COMMIT_LINES),
+          "HEAD..@{upstream}",
+        ],
+        repo,
+        gitEnv(),
+      ),
+      run(
+        "git",
+        [
+          "log",
+          "--oneline",
+          "-n",
+          String(MAX_COMMIT_LINES),
+          "@{upstream}..HEAD",
+        ],
+        repo,
+        gitEnv(),
+      ),
+    ]);
+    const lr = parseLeftRight(counts.stdout);
+    return {
+      newOnRemote: lr ? lr.right : null,
+      unpushed: lr ? lr.left : null,
+      newOnRemoteCommits: incoming.ok ? parseLogLines(incoming.stdout) : [],
+      unpushedCommits: outgoing.ok ? parseLogLines(outgoing.stdout) : [],
+      remoteError: lr
+        ? null
+        : counts.error || "git could not compare the branch with its upstream",
+    };
+  }
+
+  /**
+   * Installed build vs HEAD: the counts decide the sentence, and a list is only
+   * asked for in the direction the counts say is non-empty. Listing `installed..HEAD`
+   * alone — what this did first — read an installed build that was AHEAD of HEAD
+   * as "matches the clone", because that range is then empty.
+   */
+  async function installedFacts(repo, installedSha) {
+    const none = {
+      installedRelation: "unknown",
+      pendingCommits: [],
+      pendingCommitsError: null,
+      installedOnlyCommits: [],
+      installedOnlyError: null,
+      installedRelationError: null,
+    };
+    if (!installedSha) return none;
+    const counts = await run(
+      "git",
+      ["rev-list", "--left-right", "--count", `${installedSha}...HEAD`],
+      repo,
+      gitEnv(),
+    );
+    const lr = parseLeftRight(counts.stdout);
+    const list = (range) =>
+      run(
+        "git",
+        ["log", "--oneline", "-n", String(MAX_COMMIT_LINES), range],
+        repo,
+        gitEnv(),
+      );
+    if (!lr) {
+      // Includes an sha this clone does not contain: nothing may be claimed, and
+      // the reason belongs with the sentence, not with one of the two lists.
+      return {
+        ...none,
+        installedRelationError:
+          counts.error || "git could not compare the installed build with HEAD",
+      };
+    }
+    const [behind, ahead] = await Promise.all([
+      lr.right > 0 ? list(`${installedSha}..HEAD`) : null,
+      lr.left > 0 ? list(`HEAD..${installedSha}`) : null,
+    ]);
+    return {
+      installedRelation: commitRelationship({ installedSha, counts: lr }),
+      pendingCommits: behind?.ok ? parseLogLines(behind.stdout) : [],
+      pendingCommitsError: behind?.ok
+        ? null
+        : behind?.error || "git could not list the commits",
+      installedOnlyCommits: ahead?.ok ? parseLogLines(ahead.stdout) : [],
+      installedOnlyError: ahead?.ok
+        ? null
+        : ahead?.error || "git could not list the commits",
+    };
+  }
+
   handle(CHANNEL.status, async () => {
     const info = buildInfo();
     const out = {
@@ -228,9 +419,30 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
       branch: null,
       headSha: null,
       clean: null,
+      /** "same" | "behind" | "ahead" | "diverged" | "unknown" */
+      installedRelation: "unknown",
+      /** In HEAD, not in the installed build (max MAX_COMMIT_LINES). */
       pendingCommits: [],
-      // Display-only problems (listing pending commits) must not block Build.
+      /** In the installed build, not in HEAD (max MAX_COMMIT_LINES). */
+      installedOnlyCommits: [],
+      /** Why the installed build could not be compared; display only. */
+      installedRelationError: null,
+      /** A git operation the clone is in the middle of: "rebase", "merge", … */
+      gitOperation: null,
+      // Display-only problems (listing commits) must not block Build.
       pendingCommitsError: null,
+      installedOnlyError: null,
+      /** e.g. "origin/main"; null when the branch does not track anything. */
+      upstream: null,
+      newOnRemote: null,
+      unpushed: null,
+      newOnRemoteCommits: [],
+      unpushedCommits: [],
+      remoteError: null,
+      /** Why Pull is refused/disabled; null when it is a waiting fast-forward. */
+      pullError: null,
+      lastFetchMs: lastFetchMs || null,
+      fetchError,
       lastInstall: lastInstallRun(readText(join(archiveDir, "install.log"))),
       error: null,
       build: {
@@ -252,10 +464,12 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
       out.error = "git was not found on PATH";
       return out;
     }
-    const [branch, head, porcelain] = await Promise.all([
-      run("git", ["rev-parse", "--abbrev-ref", "HEAD"], out.repoPath),
-      run("git", ["rev-parse", "HEAD"], out.repoPath),
-      run("git", ["status", "--porcelain"], out.repoPath),
+    const repo = out.repoPath;
+    const [branch, head, porcelain, operation] = await Promise.all([
+      run("git", ["rev-parse", "--abbrev-ref", "HEAD"], repo, gitEnv()),
+      run("git", ["rev-parse", "HEAD"], repo, gitEnv()),
+      run("git", ["status", "--porcelain"], repo, gitEnv()),
+      repoOperationOf(repo),
     ]);
     if (!head.ok) {
       out.error = head.error;
@@ -264,16 +478,93 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     out.branch = branch.ok ? branch.stdout.trim() : null;
     out.headSha = head.stdout.trim();
     out.clean = porcelain.ok ? porcelain.stdout.trim() === "" : null;
-    if (out.installedSha && out.installedSha !== out.headSha) {
-      const log = await run(
-        "git",
-        ["log", `${out.installedSha}..HEAD`, "--oneline", "-n", "20"],
-        out.repoPath,
-      );
-      if (log.ok) out.pendingCommits = parseLogLines(log.stdout);
-      else out.pendingCommitsError = log.error;
+    out.gitOperation = operation.operation;
+    Object.assign(out, await installedFacts(repo, out.installedSha));
+
+    out.upstream = await trackingRef(repo);
+    // Status is on a 30 s timer, so the remote is only asked for once this window
+    // has passed; the Check button forces it.
+    if (
+      out.upstream &&
+      (lastFetchMs === 0 || Date.now() - lastFetchMs > FETCH_MAX_AGE_MS)
+    ) {
+      await fetchUpstreamOnce(repo, out.upstream);
+      out.lastFetchMs = lastFetchMs || null;
+      out.fetchError = fetchError;
     }
+    // No tracking ref is a fact the card says so about, not a failure, so
+    // remoteError keeps its null default in that case.
+    if (out.upstream) Object.assign(out, await remoteFacts(repo, out.upstream));
+    out.pullError = pullRefusal({
+      clean: out.clean,
+      buildRunning: build.running,
+      operation: out.gitOperation,
+      upstream: out.upstream,
+      unpushed: out.unpushed,
+      newOnRemote: out.newOnRemote,
+    });
     return out;
+  });
+
+  // ── fetch / pull ────────────────────────────────────────────────────────────
+  handle(CHANNEL.fetch, async () => {
+    const repo = repoPath();
+    if (!repo || !existsSync(repo))
+      return { ok: false, error: "Clone path unavailable" };
+    const upstream = await trackingRef(repo);
+    if (!upstream) {
+      fetchError = "This branch has no upstream tracking branch to fetch.";
+      lastFetchMs = Date.now();
+      return { ok: false, error: fetchError };
+    }
+    const error = await fetchUpstreamOnce(repo, upstream);
+    return error ? { ok: false, error } : { ok: true };
+  });
+
+  /**
+   * Pull = `git merge --ff-only @{upstream}`, and never anything else: no rebase,
+   * no merge commit, no reset. The guards are re-read here rather than trusted
+   * from the last status, and git itself still refuses a non-fast-forward — the
+   * window between reading and merging is closed by git, not by us.
+   */
+  handle(CHANNEL.pull, async () => {
+    if (!supported) return { ok: false, error: "Only supported on Windows" };
+    const repo = repoPath();
+    if (!repo || !existsSync(repo))
+      return { ok: false, error: "Clone path unavailable" };
+    const [porcelain, operation, upstream] = await Promise.all([
+      run("git", ["status", "--porcelain"], repo, gitEnv()),
+      repoOperationOf(repo),
+      trackingRef(repo),
+    ]);
+    const clean = porcelain.ok ? porcelain.stdout.trim() === "" : null;
+    const facts = upstream
+      ? await remoteFacts(repo, upstream)
+      : {
+          newOnRemote: null,
+          unpushed: null,
+          newOnRemoteCommits: [],
+          unpushedCommits: [],
+        };
+    const refusal = pullRefusal({
+      clean,
+      buildRunning: build.running,
+      operation: operation.operation,
+      upstream,
+      unpushed: facts.unpushed,
+      newOnRemote: facts.newOnRemote,
+    });
+    if (refusal) return { ok: false, error: refusal };
+    const r = await run(
+      "git",
+      ["merge", "--ff-only", "@{upstream}"],
+      repo,
+      gitEnv(),
+      PULL_TIMEOUT_MS,
+    );
+    return r.ok
+      ? { ok: true, output: r.stdout.trim() }
+      : { ok: false, error: r.error || "git merge --ff-only failed" };
   });
 
   // ── build ───────────────────────────────────────────────────────────────────

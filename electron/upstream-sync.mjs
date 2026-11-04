@@ -20,12 +20,13 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 
 import {
   AGENT_LAUNCHER_PS1,
   AGENT_WRAPPER_PS1,
 } from "./lib/agent-launch-script.mjs";
+import { repoOperation } from "./lib/repo-state.mjs";
 import {
   TRANSLATION_FILE,
   mergeTranslations,
@@ -34,7 +35,6 @@ import {
   AGENT_LABELS,
   agentCommandLine,
   backupBranchName,
-  branchFromHeadName,
   deriveSyncPhase,
   describeFetchFailure,
   discardedBackupRef,
@@ -51,6 +51,7 @@ import { isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
 import {
   OVERRIDE_FILE,
   getArchiveDir,
+  gitEnv,
   onPath,
   readJson,
   readText,
@@ -186,36 +187,20 @@ export function registerUpstreamSync({
   const safeTag = (tag) => (isReleaseTag(tag) ? String(tag).trim() : null);
 
   /**
-   * `git rev-parse --git-path <key>`, as an absolute path (git prints one that is
-   * relative to the clone). "" when it cannot answer.
-   */
-  async function gitPath(repo, key) {
-    const r = await run(
-      "git",
-      ["rev-parse", "--git-path", key],
-      repo,
-      gitEnv(),
-    );
-    const path = r.ok ? r.stdout.trim() : "";
-    if (!path) return "";
-    return isAbsolute(path) ? path : join(repo, path);
-  }
-
-  /**
    * git's own rebase state. While a rebase is stopped, `HEAD` is detached, so the
    * branch it was started on only exists in the `head-name` file git keeps
-   * (`refs/heads/<branch>`).
+   * (`refs/heads/<branch>`). The probe is shared with the Custom build card, which
+   * refuses a Pull over the same state (see lib/repo-state.mjs).
    */
   async function rebaseState(repo) {
-    for (const key of ["rebase-merge", "rebase-apply"]) {
-      const dir = await gitPath(repo, key);
-      if (!dir || !existsSync(dir)) continue;
-      return {
-        paused: true,
-        branch: branchFromHeadName(readText(join(dir, "head-name"))),
-      };
-    }
-    return { paused: false, branch: null };
+    const { operation, branch } = await repoOperation({
+      repo,
+      env: gitEnv(),
+      run,
+      existsSync,
+      readText,
+    });
+    return { paused: operation === "rebase", branch };
   }
 
   /** `merge-base --is-ancestor`; false for "no" and for an unknown revision. */
