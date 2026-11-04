@@ -312,7 +312,8 @@ describe("CustomBuildCard", () => {
   it("keeps waiting through the poll that sees no result yet", async () => {
     // self-update.mjs clears `running` a moment before it stores `result`. Adopting
     // that pair would end the poll and leave the card with nothing to show, so a
-    // poll that expects a build only ends on a running build or a real result.
+    // poll that expects a build only ends on a running build or a real result —
+    // until MAX_BUILD_WAIT_POLLS of them report no build at all (the next test).
     vi.useFakeTimers();
     try {
       const status = vi
@@ -387,6 +388,49 @@ describe("CustomBuildCard", () => {
       expect(screen.getByTestId("custom-build-failure")).toHaveTextContent(
         "Build exited with code 1",
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up waiting when no poll ever reports a build", async () => {
+    // F4: the build can be lost before self-update.mjs stores any state (the main
+    // process restarts, the handler throws first). Polling a status that carries no
+    // build waited forever: the card stayed "building" with nothing running.
+    vi.useFakeTimers();
+    try {
+      const status = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...baseStatus,
+          build: {
+            running: true,
+            log: ["npm run build:desktop"],
+            result: null,
+          },
+        })
+        .mockResolvedValue({
+          ...baseStatus,
+          build: { running: false, log: [], result: null },
+        });
+      installBridge({}, { status });
+      render(<CustomBuildCard />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        screen.getByTestId("custom-build-cancel-button"),
+      ).toBeInTheDocument();
+
+      for (let i = 0; i < 5; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+      }
+      expect(
+        screen.queryByTestId("custom-build-cancel-button"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("custom-build-build-button")).toBeEnabled();
     } finally {
       vi.useRealTimers();
     }

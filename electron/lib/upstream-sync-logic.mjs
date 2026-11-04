@@ -93,13 +93,27 @@ export function newestReleaseTag(tags) {
 
 // ── backup branches ───────────────────────────────────────────────────────────
 
+function stamp(date) {
+  const pad = (n, width = 2) => String(n).padStart(width, "0");
+  return (
+    `${pad(date.getFullYear(), 4)}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  );
+}
+
 /** `backup/<branch>-<yyyymmdd-HHMMss>` in local time (the stamp is ours). */
 export function backupBranchName(branch, date = new Date()) {
-  const pad = (n, width = 2) => String(n).padStart(width, "0");
-  const stamp =
-    `${pad(date.getFullYear(), 4)}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
-  return `backup/${branch}-${stamp}`;
+  return `backup/${branch}-${stamp(date)}`;
+}
+
+/**
+ * Where Discard parks the commits it rolls back: resetting the branch to the
+ * backup would otherwise leave the sync's commits in the reflog only. Same shape
+ * (and the same name check) as the backup branch, a different namespace.
+ */
+export function discardedBackupRef(branch, date = new Date()) {
+  if (!isSafeRefName(branch)) return null;
+  return `discarded/${branch}-${stamp(date)}`;
 }
 
 /** Whether a name is one this app generated (so `discard` may reset to it). */
@@ -213,6 +227,10 @@ export function syncTaskText({
   backupBranch,
   conflictedFiles = [],
 }) {
+  // A caller that hands over the facts object instead of the path used to print
+  // `Repo: [object Object]` into the task an agent reads. No task beats a lie:
+  // the panel hides the copy button on an empty string.
+  if (typeof repoPath !== "string" || !repoPath) return "";
   const files = conflictedFiles.length
     ? conflictedFiles.map((f) => `- ${f}`).join("\n")
     : "- (none listed — run `git status` to see what git reports)";
@@ -261,6 +279,9 @@ only those keys need your hand. Exit 2 = that file was not conflicted, so ignore
    explanation of why at the end of this log.
 6. Do not install anything globally, do not touch other branches or repos, and
    leave \`CUSTOM_FORK.md\` readable (append what changed if you had to adapt).
+7. If a git hook fails for an environment reason (e.g. the husky pre-commit hook
+   cannot start bash), report it; do not bypass hooks with \`--no-verify\`,
+   \`HUSKY=0\` or any other way. Leave that commit undone and say so.
 `;
 }
 
@@ -327,6 +348,20 @@ export function branchFromHeadName(value) {
   const name = typeof value === "string" ? value.trim() : "";
   if (!name.startsWith("refs/heads/")) return null;
   return name.slice("refs/heads/".length) || null;
+}
+
+/**
+ * The command that resumes whatever git has actually paused. Naming
+ * `git rebase --continue` during a cherry-pick sends the reader to a command that
+ * fails, so the caller detects the operation from git's own marker files.
+ *
+ * @param {"rebase"|"cherry-pick"|null|undefined} operation
+ * @returns {string|null} null when nothing is paused (nothing to continue)
+ */
+export function continueCommandFor(operation) {
+  if (operation === "cherry-pick") return "git cherry-pick --continue";
+  if (operation === "rebase") return "git rebase --continue";
+  return null;
 }
 
 // ── phases ────────────────────────────────────────────────────────────────────

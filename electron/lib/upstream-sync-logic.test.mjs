@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,8 +12,10 @@ import {
   backupBranchName,
   branchFromHeadName,
   compareReleaseTags,
+  continueCommandFor,
   deriveSyncPhase,
   describeFetchFailure,
+  discardedBackupRef,
   isBackupBranchName,
   isReleaseTag,
   isSafeRefName,
@@ -199,6 +204,47 @@ describe("backup branches", () => {
   });
 });
 
+describe("discarded branches", () => {
+  const date = new Date(2026, 10, 4, 9, 5, 3); // local time, no TZ surprises
+
+  it("builds discarded/<branch>-<yyyymmdd-HHMMss>", () => {
+    expect(discardedBackupRef("main", date)).toBe(
+      "discarded/main-20261104-090503",
+    );
+    expect(discardedBackupRef("custom/upstream-sync", date)).toBe(
+      "discarded/custom/upstream-sync-20261104-090503",
+    );
+  });
+
+  it("keeps its own namespace, in a name git accepts", () => {
+    expect(discardedBackupRef("main", date)).not.toBe(
+      backupBranchName("main", date),
+    );
+    expect(isSafeRefName(discardedBackupRef("main", date))).toBe(true);
+  });
+
+  it("refuses an unsafe branch name instead of building a broken ref", () => {
+    expect(discardedBackupRef("main; rm -rf", date)).toBeNull();
+    expect(discardedBackupRef("", date)).toBeNull();
+    expect(discardedBackupRef(undefined, date)).toBeNull();
+  });
+});
+
+describe("the command that resumes git", () => {
+  it("names the operation git actually paused", () => {
+    expect(continueCommandFor("rebase")).toBe("git rebase --continue");
+    expect(continueCommandFor("cherry-pick")).toBe(
+      "git cherry-pick --continue",
+    );
+  });
+
+  it("has nothing to continue when nothing is paused", () => {
+    expect(continueCommandFor(null)).toBeNull();
+    expect(continueCommandFor(undefined)).toBeNull();
+    expect(continueCommandFor("merge")).toBeNull();
+  });
+});
+
 describe("agent command lines", () => {
   const TASK =
     "C:\\Users\\me\\AppData\\Local\\AgentCanvasBuilds\\sync-task-1.md";
@@ -272,6 +318,35 @@ describe("syncTaskText", () => {
     expect(text).toContain("src/i18n/translation.json");
   });
 
+  it("puts the repo path first, where the agent is told to start", () => {
+    const firstLine = text
+      .split("\n")
+      .find((line) => line.trim() && !line.startsWith("#"));
+    expect(firstLine).toBe(
+      "Repo: C:\\Projects\\personal\\OpenHands  (start by cd-ing into it; do not work anywhere else)",
+    );
+  });
+
+  it("refuses a repo that is not a path instead of printing [object Object]", () => {
+    // The shipped bug: the caller passed the whole facts object for `repoPath`.
+    expect(
+      syncTaskText({
+        repoPath: { repoPath: "C:\\Projects\\personal\\OpenHands" },
+        branch: "main",
+        targetTag: "v1.35.0",
+        backupBranch: "backup/main-20261104-090503",
+      }),
+    ).toBe("");
+    expect(
+      syncTaskText({
+        repoPath: "",
+        branch: "main",
+        targetTag: "v1.35.0",
+        backupBranch: "backup/main-20261104-090503",
+      }),
+    ).toBe("");
+  });
+
   it("lists the fork's own files", () => {
     for (const file of FORK_FILES) expect(text).toContain(file);
     expect(FORK_FILES).toContain("electron/self-update.mjs");
@@ -291,6 +366,14 @@ describe("syncTaskText", () => {
     expect(text).toContain("Never push");
     expect(text).toContain("git rebase --abort");
     expect(text).toContain("npm run check-translation-completeness");
+  });
+
+  it("keeps a broken git hook an environment problem to report", () => {
+    // The husky pre-commit hook dies on machines without a working bash; the
+    // agent must say so rather than commit around it.
+    expect(text).toContain("do not bypass hooks with `--no-verify`");
+    // The S3 agent routed around the hook with HUSKY=0 instead.
+    expect(text).toContain("`HUSKY=0` or any other way");
   });
 
   it("sends the agent to the fork's i18n merger before it edits anything", () => {
@@ -552,5 +635,58 @@ describe("deriveSyncPhase", () => {
         },
       }),
     ).toBe("rebased");
+  });
+});
+
+describe("the sync's own wording (src/i18n/translation.json)", () => {
+  // vitest runs this file in the jsdom environment, where import.meta.url is not a
+  // file: URL, so the repo's own file is resolved from the run's directory.
+  const translations = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "src", "i18n", "translation.json"),
+      "utf8",
+    ),
+  );
+  // Any key of the feature is a complete language list: the completeness script
+  // guarantees every key has all 16, so this only has to name one.
+  const LANGUAGES = Object.keys(translations["SYNC$START"]);
+
+  const langsOf = (key) => {
+    expect(Object.keys(translations[key]).sort()).toEqual(
+      [...LANGUAGES].sort(),
+    );
+    return translations[key];
+  };
+
+  it("promises the discarded commits are kept, in every language", () => {
+    const confirm = langsOf("SYNC$DISCARD_CONFIRM");
+    for (const lang of LANGUAGES) {
+      expect(confirm[lang]).toContain("{{kept}}");
+    }
+    expect(confirm.en).toContain("{{branch}}");
+    expect(confirm.en).toContain("{{backup}}");
+    expect(confirm.en).toMatch(/stay|keep/i);
+  });
+
+  it("names the git stop as a stop, not as a translation problem", () => {
+    const stopped = langsOf("SYNC$REBASE_STOPPED");
+    const left = langsOf("SYNC$TRANSLATION_LEFT");
+    expect(stopped.en).not.toBe(left.en);
+    expect(stopped.en).not.toContain("translation");
+    for (const lang of LANGUAGES) expect(stopped[lang]).toContain("{{reason}}");
+  });
+
+  it("only claims a build is running in the line that means a build runs", () => {
+    const running = langsOf("SYNC$REBASED");
+    const idle = langsOf("SYNC$REBASED_NO_BUILD");
+    expect(idle.en).not.toBe(running.en);
+    expect(idle.en.toLowerCase()).toContain("no build");
+    expect(running.en.toLowerCase()).toContain("build is running");
+  });
+
+  it("gives the discard confirmation its own label", () => {
+    const yes = langsOf("SYNC$DISCARD_YES");
+    expect(yes.en).toBe("Yes, discard");
+    expect(yes.en).not.toBe(langsOf("SYNC$DISCARD_CONFIRM").en);
   });
 });

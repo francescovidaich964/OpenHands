@@ -62,7 +62,13 @@ function PhaseMessage({ data }: { data: SyncPayload }) {
       data.conflictedFiles.length > 0
         ? t(I18nKey.SYNC$CONFLICT, { tag })
         : t(I18nKey.SYNC$REBASING, { tag }),
-    rebased: t(I18nKey.SYNC$REBASED, { tag }),
+    // Whether a build runs is a fact from the payload, not a guess: promising one
+    // that is not running (a conflict sync, a refused auto-build) is read as a lie
+    // the moment the card underneath stays idle.
+    rebased: t(
+      data.building ? I18nKey.SYNC$REBASED : I18nKey.SYNC$REBASED_NO_BUILD,
+      { tag },
+    ),
     dirty: t(I18nKey.SYNC$DIRTY),
     installed: t(I18nKey.SYNC$INSTALLED, {
       tag,
@@ -154,12 +160,23 @@ export function UpstreamSyncPanel({
     return () => window.clearInterval(id);
   }, [live, load]);
 
+  // A running agent is worth watching: opencode writes nearly everything to its
+  // error log, so a collapsed block reads as an empty one.
+  useEffect(() => {
+    if (data?.agent?.running) setLogOpen(true);
+  }, [data?.agent?.running]);
+
   if (!bridge || !data?.supported) return null;
+
+  /**
+   * The row reads "last synced from this branch", so a push recorded while the app
+   * sat on another branch is not news about the branch you are looking at.
+   */
+  const lastSync = data.lastSync?.branch === data.branch ? data.lastSync : null;
 
   /** One action at a time; every button reloads the facts when it is done. */
   const act = async (
-    fn: () => Promise<{ ok: boolean; error?: string }>,
-    startedBuild = false,
+    fn: () => Promise<{ ok: boolean; error?: string; buildStarted?: boolean }>,
   ) => {
     setBusy(true);
     setError(null);
@@ -169,7 +186,9 @@ export function UpstreamSyncPanel({
     try {
       const r = await fn();
       if (!r.ok) failed = r.error ?? "";
-      else if (startedBuild) onBuildStarted?.();
+      // Only sync:start answers whether it launched the build. A sync that stopped on
+      // conflicts launched none, and the card would sit on "Building..." forever.
+      else if (r.buildStarted) onBuildStarted?.();
     } finally {
       setBusy(false);
     }
@@ -219,11 +238,11 @@ export function UpstreamSyncPanel({
             value={data.state.backupBranch}
           />
         )}
-        {data.lastSync && (
+        {lastSync && (
           <Row
             label={t(I18nKey.SYNC$LAST_SYNC)}
-            value={`${data.lastSync.tag} · ${new Date(
-              data.lastSync.pushedMs,
+            value={`${lastSync.tag} · ${new Date(
+              lastSync.pushedMs,
             ).toLocaleString()}`}
           />
         )}
@@ -264,12 +283,18 @@ export function UpstreamSyncPanel({
           data-testid="upstream-sync-auto-merge"
           className="break-words text-xs text-muted"
         >
-          {data.autoMerge.conflicts.length > 0 || data.autoMerge.error
+          {data.autoMerge.conflicts.length > 0
             ? t(I18nKey.SYNC$TRANSLATION_LEFT, {
-                reason:
-                  data.autoMerge.conflicts.join(", ") || data.autoMerge.error,
+                reason: data.autoMerge.conflicts.join(", "),
               })
-            : t(I18nKey.SYNC$AUTO_MERGED, { keys: data.autoMerge.keys })}
+            : data.autoMerge.error
+              ? // A failed `git rebase --continue` is not a translation problem, and
+                // naming the i18n file sent the reader to the wrong place. First line
+                // only: git's own hint runs to several.
+                t(I18nKey.SYNC$REBASE_STOPPED, {
+                  reason: String(data.autoMerge.error).split(/\r?\n/)[0],
+                })
+              : t(I18nKey.SYNC$AUTO_MERGED, { keys: data.autoMerge.keys })}
         </p>
       )}
 
@@ -288,7 +313,7 @@ export function UpstreamSyncPanel({
           type="button"
           variant="primary"
           isDisabled={!canStart}
-          onClick={() => void act(() => bridge.syncStart(), true)}
+          onClick={() => void act(() => bridge.syncStart())}
         >
           {t(I18nKey.SYNC$START)}
         </BrandButton>
@@ -383,6 +408,9 @@ export function UpstreamSyncPanel({
                 data.discardPreview?.backupBranch ??
                 data.state?.backupBranch ??
                 "",
+              // Where the rolled-back commits stay. "-" only for a record written
+              // before the app named that branch; Discard refuses those.
+              kept: data.discardPreview?.discardedBranch ?? "-",
             })}
           </span>
           {(data.discardPreview?.commits.length ?? 0) > 0 && (
@@ -411,7 +439,7 @@ export function UpstreamSyncPanel({
               isDisabled={locked}
               onClick={() => void act(() => bridge.syncDiscard())}
             >
-              {t(I18nKey.SYNC$DISCARD)}
+              {t(I18nKey.SYNC$DISCARD_YES)}
             </BrandButton>
             <BrandButton
               testId="upstream-sync-discard-keep-button"

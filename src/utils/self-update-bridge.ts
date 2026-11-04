@@ -112,6 +112,8 @@ export interface SyncPayload {
     tag: string;
     pushedMs: number;
     backupBranch: string | null;
+    /** The branch the push rewound; the row is hidden for any other branch. */
+    branch?: string | null;
   } | null;
   /**
    * Display only: what the key-level merge of `src/i18n/translation.json` did during this sync —
@@ -137,6 +139,8 @@ export interface SyncPayload {
   /** What Discard would drop, for the two-step confirmation. */
   discardPreview: {
     backupBranch: string;
+    /** Where the rolled-back commits are kept (null: an older sync record). */
+    discardedBranch: string | null;
     commits: string[];
     truncated: boolean;
   } | null;
@@ -172,6 +176,8 @@ export interface SelfUpdateBridge {
     phase?: SyncPhase;
     targetTag?: string;
     backupBranch?: string;
+    /** False when the rebase stopped on conflicts: no build was started. */
+    buildStarted?: boolean;
   }>;
   syncAgent: (kind: SyncAgentKind) => Promise<{
     ok: boolean;
@@ -185,6 +191,8 @@ export interface SelfUpdateBridge {
     ok: boolean;
     error?: string;
     backupBranch?: string;
+    /** The branch the discarded commits were kept on. */
+    discardedBranch?: string;
   }>;
   syncPush: () => Promise<{
     ok: boolean;

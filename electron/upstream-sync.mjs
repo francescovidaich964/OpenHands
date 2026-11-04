@@ -37,8 +37,10 @@ import {
   branchFromHeadName,
   deriveSyncPhase,
   describeFetchFailure,
+  discardedBackupRef,
   isBackupBranchName,
   isReleaseTag,
+  isSafeRefName,
   newestReleaseTag,
   pushArgs,
   resolveSyncSettings,
@@ -365,9 +367,20 @@ export function registerUpstreamSync({
       .filter(Boolean);
     return {
       backupBranch: backup,
+      discardedBranch: safeDiscardedBranch(state),
       commits: lines.slice(0, MAX_DISCARD_COMMITS),
       truncated: lines.length > MAX_DISCARD_COMMITS,
     };
+  }
+
+  /**
+   * The branch Discard will park the rolled-back commits on, from the sync record.
+   * A sync started before this existed has no name, so the preview and the reset
+   * both say so instead of promising a branch nobody will create.
+   */
+  function safeDiscardedBranch(state) {
+    const name = state.sync?.discardedBranch;
+    return typeof name === "string" && isSafeRefName(name) ? name : null;
   }
 
   /** Last `max` non-empty lines of a log file. */
@@ -447,7 +460,9 @@ export function registerUpstreamSync({
       taskText:
         repo && state.sync && safeTag(state.sync.latestTag)
           ? syncTaskText({
-              repoPath: repo,
+              // `repo` is the clone path; `repoPath` is the same string inside the
+              // facts object. Passing the object printed as [object Object].
+              repoPath: facts.repoPath,
               branch: facts.settings.syncBranch,
               targetTag: state.sync.latestTag,
               backupBranch: state.sync.backupBranch ?? "",
@@ -680,6 +695,9 @@ export function registerUpstreamSync({
           sync: {
             latestTag: facts.latestTag,
             backupBranch,
+            // Name chosen now so the Discard preview can promise it and the reset
+            // can keep to it; the ref itself is only created if the user discards.
+            discardedBranch: discardedBackupRef(s.syncBranch),
             originSha: remoteRef.ok ? remoteRef.stdout.trim() : null,
             startedMs: Date.now(),
             pushed: false,
@@ -718,6 +736,8 @@ export function registerUpstreamSync({
           backupBranch,
           error: fetchError,
           autoMerge,
+          // No build: the branch is mid-rebase, so the Build card must stay as it was.
+          buildStarted: false,
         };
       }
       // `rebase.ok` is false whenever git stopped for a conflict — including one this resolver just
@@ -756,6 +776,8 @@ export function registerUpstreamSync({
         backupBranch,
         error: fetchError,
         autoMerge,
+        // The card may show "Building..." only when a build really was asked for.
+        buildStarted: true,
       };
     } finally {
       busy = false;
@@ -1063,12 +1085,36 @@ export function registerUpstreamSync({
     if (!exists.ok) {
       return { ok: false, error: `Backup branch ${backup} no longer exists` };
     }
+    // The reset would otherwise leave the sync's commits in the reflog only: park
+    // them on the branch the preview named, and refuse to roll back without it.
+    const parked = safeDiscardedBranch(readState());
+    if (!parked) {
+      return {
+        ok: false,
+        error:
+          "This sync has no branch recorded for keeping the discarded commits — delete the commits by hand instead of using Discard",
+      };
+    }
+    const head = await run("git", ["rev-parse", "HEAD"], repo, gitEnv());
+    if (!head.ok) return { ok: false, error: head.error };
+    const keep = await run(
+      "git",
+      ["branch", parked, head.stdout.trim()],
+      repo,
+      gitEnv(),
+    );
+    if (!keep.ok) {
+      return {
+        ok: false,
+        error: `Could not keep the discarded commits on ${parked}: ${keep.error}`,
+      };
+    }
     // --keep refuses to clobber local changes (unlike --hard), so a dirty tree
     // fails here with git's own message instead of losing work.
     const r = await run("git", ["reset", "--keep", backup], repo, gitEnv());
     if (!r.ok) return { ok: false, error: r.error };
     clearSync();
-    return { ok: true, backupBranch: backup };
+    return { ok: true, backupBranch: backup, discardedBranch: parked };
   });
 
   handle(CHANNEL.push, async () => {
@@ -1152,6 +1198,9 @@ export function registerUpstreamSync({
       tag: state.sync.latestTag,
       pushedMs: Date.now(),
       backupBranch: state.sync.backupBranch ?? null,
+      // The row is only about the branch this clone is on; another sync branch
+      // (feature branches are rebased by hand) must not show it.
+      branch: facts.settings.syncBranch,
     };
     saveState(after);
     return {

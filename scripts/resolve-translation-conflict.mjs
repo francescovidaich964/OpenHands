@@ -19,7 +19,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,23 @@ import {
   TRANSLATION_FILE,
   mergeTranslations,
 } from "../electron/lib/translation-merge.mjs";
+import { continueCommandFor } from "../electron/lib/upstream-sync-logic.mjs";
+
+/**
+ * Which sequencer git has paused, read from its own marker files. A conflicted
+ * rebase step also leaves a CHERRY_PICK_HEAD (inside the rebase directory), so the
+ * rebase directories are checked first. null = neither, so nothing is claimed.
+ */
+function pausedOperation(repoDir) {
+  const dir = git(repoDir, ["rev-parse", "--absolute-git-dir"]);
+  if (!dir.ok) return null;
+  const gitDir = dir.stdout.trim();
+  if (gitDir === "") return null;
+  if (existsSync(join(gitDir, "rebase-merge"))) return "rebase";
+  if (existsSync(join(gitDir, "rebase-apply"))) return "rebase";
+  if (existsSync(join(gitDir, "CHERRY_PICK_HEAD"))) return "cherry-pick";
+  return null;
+}
 
 /** Run git with an argument array (never a shell string) and report failure instead of throwing. */
 function git(repoDir, args) {
@@ -141,10 +158,15 @@ function main() {
     `${merged.changed.length} updated`,
     `${merged.removed.length} removed`,
   ];
+  // Which command resumes depends on what git was doing when it stopped: a paused
+  // cherry-pick does not answer to `git rebase --continue`.
+  const goOn = continueCommandFor(pausedOperation(repoDir));
   process.stdout.write(
     `merged ${TRANSLATION_FILE} at key level (${parts.join(", ")}) and staged it.\n` +
       (conflicted.length === 1
-        ? "That was the only conflict: run `git rebase --continue`.\n"
+        ? goOn
+          ? `That was the only conflict: run \`${goOn}\`.\n`
+          : "That was the only conflict: now continue the operation you were running.\n"
         : `${conflicted.length - 1} other file(s) still conflicted: ${conflicted
             .filter((f) => f !== TRANSLATION_FILE)
             .join(", ")}\n`),

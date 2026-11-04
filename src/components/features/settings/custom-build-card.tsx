@@ -14,6 +14,8 @@ import {
 const MAX_LOG_LINES = 2000;
 /** Re-read the main process while a build it started could be finishing. */
 const BUILD_POLL_MS = 5000;
+/** Polls with no build state before the card stops believing a build is running. */
+const MAX_BUILD_WAIT_POLLS = 5;
 const FAILURE_LOG_LINES = 50;
 const SHORT_SHA = 10;
 
@@ -89,6 +91,8 @@ function CustomBuildCardInner() {
       setSelectedArchive((cur) =>
         entries.some((e) => e.path === cur) ? cur : (fallback?.path ?? ""),
       );
+      // The caller decides whether a build is still worth waiting for (see below).
+      return s;
     },
     [bridge],
   );
@@ -103,12 +107,19 @@ function CustomBuildCardInner() {
   // The upstream sync starts a build this card did not ask for (it only says
   // "a build started"). Keep adopting the main process's build state while one is
   // running, so the card also learns when that build ended and what it returned.
+  // The wait is bounded: a build the sync promised but never started (a guard in the
+  // main process refused it) would otherwise leave this card on "Building..." with
+  // nothing to show. Any real build state resets the count.
   useEffect(() => {
     if (!building) return;
-    const id = window.setInterval(
-      () => void refresh(true, true),
-      BUILD_POLL_MS,
-    );
+    let stalled = 0;
+    const tick = async () => {
+      const s = await refresh(true, true);
+      const noState = !s.build || (!s.build.running && !s.build.result);
+      stalled = noState ? stalled + 1 : 0;
+      if (stalled >= MAX_BUILD_WAIT_POLLS) setBuilding(false);
+    };
+    const id = window.setInterval(() => void tick(), BUILD_POLL_MS);
     return () => window.clearInterval(id);
   }, [building, refresh]);
 

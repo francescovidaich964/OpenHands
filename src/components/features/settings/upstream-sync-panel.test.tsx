@@ -68,6 +68,7 @@ function payload(overrides: Partial<SyncPayload> = {}): SyncPayload {
     clearedBackup: null,
     discardPreview: {
       backupBranch: record.backupBranch,
+      discardedBranch: "discarded/custom-upstream-sync-20261104-100000",
       commits: ["bbbbbbbbbb2222 fork: keep the custom build"],
       truncated: false,
     },
@@ -87,7 +88,11 @@ function installBridge(next: SyncPayload) {
     onLog: vi.fn().mockReturnValue(() => {}),
     syncState: vi.fn().mockResolvedValue(next),
     syncCheck: vi.fn().mockResolvedValue(next),
-    syncStart: vi.fn().mockResolvedValue({ ok: true, phase: "rebased" }),
+    syncStart: vi.fn().mockResolvedValue({
+      ok: true,
+      phase: "rebased",
+      buildStarted: true,
+    }),
     syncAgent: vi.fn().mockResolvedValue({ ok: true, pid: 4242 }),
     syncAbort: vi.fn().mockResolvedValue({ ok: true }),
     syncDiscard: vi.fn().mockResolvedValue({ ok: true }),
@@ -253,10 +258,16 @@ describe("UpstreamSyncPanel", () => {
     expect(
       await screen.findByTestId("upstream-sync-agent-status"),
     ).toBeInTheDocument();
-    fireEvent.click(await screen.findByText("SYNC$AGENT_LOG"));
-    expect(screen.getByTestId("upstream-sync-agent-log")).toHaveTextContent(
-      "working on it",
-    );
+    // F4: a running agent's log is open without a click (opencode writes almost
+    // everything to stderr, so a collapsed block reads as an empty one).
+    expect(
+      await screen.findByTestId("upstream-sync-agent-log"),
+    ).toHaveTextContent("working on it");
+    // The toggle stays usable: it closes the log and the next poll leaves it shut.
+    fireEvent.click(screen.getByText("SYNC$AGENT_LOG"));
+    expect(
+      screen.queryByTestId("upstream-sync-agent-log"),
+    ).not.toBeInTheDocument();
     // A running agent blocks the mutating buttons, but Check stays usable so the
     // user can watch progress.
     expect(screen.getByTestId("upstream-sync-abort-button")).toBeDisabled();
@@ -282,6 +293,95 @@ describe("UpstreamSyncPanel", () => {
       expect(bridge.syncStart).toHaveBeenCalled();
       expect(onBuildStarted).toHaveBeenCalled();
     });
+  });
+
+  it("does not promise a build the sync never started", async () => {
+    // F4: a sync that stopped on conflicts starts no build, so the parent card must
+    // not switch to its "building" state on the strength of a green reply.
+    const bridge = installBridge(payload());
+    vi.mocked(bridge.syncStart).mockResolvedValueOnce({
+      ok: true,
+      phase: "conflict",
+      buildStarted: false,
+    });
+    const onBuildStarted = vi.fn();
+    render(<UpstreamSyncPanel onBuildStarted={onBuildStarted} />);
+    fireEvent.click(await screen.findByTestId("upstream-sync-start-button"));
+    await waitFor(() => expect(bridge.syncStart).toHaveBeenCalled());
+    expect(onBuildStarted).not.toHaveBeenCalled();
+  });
+
+  it("only claims a rebuild is running when one actually started", async () => {
+    installBridge(payload({ phase: "rebased", building: true }));
+    const { unmount } = render(<UpstreamSyncPanel />);
+    await screen.findByTestId("upstream-sync-panel");
+    expect(screen.getByTestId("upstream-sync-phase").textContent).toBe(
+      "SYNC$REBASED",
+    );
+    unmount();
+
+    installBridge(payload({ phase: "rebased", building: false }));
+    render(<UpstreamSyncPanel />);
+    await screen.findByTestId("upstream-sync-panel");
+    expect(screen.getByTestId("upstream-sync-phase").textContent).toBe(
+      "SYNC$REBASED_NO_BUILD",
+    );
+  });
+
+  it("names the git error when the auto-merge could not continue the rebase", async () => {
+    // F4: a failed `git rebase --continue` is not a translation problem, and the
+    // old sentence sent the reader to the i18n file.
+    installBridge(
+      payload({
+        phase: "conflict",
+        rebaseInProgress: true,
+        conflictedFiles: [],
+        autoMerge: {
+          stops: 1,
+          keys: 0,
+          conflicts: [],
+          error: "git rebase --continue failed:\nhint: Disable this message",
+          ms: 4,
+        },
+      }),
+    );
+    render(<UpstreamSyncPanel />);
+    expect(
+      await screen.findByTestId("upstream-sync-auto-merge"),
+    ).toHaveTextContent("SYNC$REBASE_STOPPED");
+  });
+
+  it("only reports the last sync when it belongs to the branch you are on", async () => {
+    const lastSync = {
+      tag: "v1.35.0",
+      pushedMs: 1762000000000,
+      backupBranch: "backup/custom/upstream-sync-20261104-100000",
+      branch: "custom/upstream-sync",
+    };
+    installBridge(payload({ lastSync }));
+    const { unmount } = render(<UpstreamSyncPanel />);
+    expect(await screen.findByText("SYNC$LAST_SYNC")).toBeInTheDocument();
+    unmount();
+
+    // F4: a sync pushed from another branch says nothing about this one.
+    installBridge(
+      payload({ lastSync: { ...lastSync, branch: "custom/other-branch" } }),
+    );
+    render(<UpstreamSyncPanel />);
+    await screen.findByTestId("upstream-sync-panel");
+    expect(screen.queryByText("SYNC$LAST_SYNC")).not.toBeInTheDocument();
+  });
+
+  it("labels the discard confirmation with its own text", async () => {
+    // F4: the confirm button reused the key of the sentence above it, so the two
+    // read as one run-on string in the UI.
+    installBridge(payload({ phase: "installed", branchContainsTarget: true }));
+    render(<UpstreamSyncPanel />);
+    fireEvent.click(await screen.findByTestId("upstream-sync-discard-button"));
+    const yes = await screen.findByTestId(
+      "upstream-sync-discard-confirm-button",
+    );
+    expect(yes).toHaveTextContent("SYNC$DISCARD_YES");
   });
 
   it("says what happened when a later check finds the sync already merged", async () => {
