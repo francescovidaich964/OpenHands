@@ -56,6 +56,7 @@ import { spawnSync } from "node:child_process";
 
 import { isExternalBrowsableUrl, isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
 import { resolveBundledRuntimeDir } from "./lib/bundled-runtime-dir.mjs";
+import { registerSelfUpdate } from "./self-update.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -777,6 +778,9 @@ app.whenReady().then(async () => {
     openExternal: (url) => shell.openExternal(url),
   });
   marsTunnelBridge.registerIpc(ipcMain);
+
+  // Fork-only: "Custom build" rebuild & install (see self-update.mjs).
+  registerSelfUpdate({ app, ipcMain, getMainWindow: () => mainWin });
 
   if (!uvxAvailable()) {
     dialog.showErrorBox(

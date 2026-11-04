@@ -90,3 +90,22 @@ contextBridge.exposeInMainWorld("marsBridge", {
   /** Reads a session's current connection status without changing it. */
   getTunnel: (sessionId) => ipcRenderer.invoke("mars:getTunnel", sessionId),
 });
+
+// Fork-only "Custom build" self-update (see electron/self-update.mjs). The main
+// process only answers this window's own page; channel names mirror CHANNEL
+// there, duplicated as literals because this preload cannot import ESM.
+contextBridge.exposeInMainWorld("agentCanvasSelfUpdate", {
+  status: () => ipcRenderer.invoke("self-update:status"),
+  build: () => ipcRenderer.invoke("self-update:build"),
+  cancel: () => ipcRenderer.invoke("self-update:cancel"),
+  /** `installerPath` must come from build() or listArchive(). Quits the app. */
+  install: (installerPath) =>
+    ipcRenderer.invoke("self-update:install", installerPath),
+  listArchive: () => ipcRenderer.invoke("self-update:list-archive"),
+  /** Subscribe to build output batches: cb(string[]). Returns an unsubscribe fn. */
+  onLog(cb) {
+    const handler = (_event, lines) => cb(lines);
+    ipcRenderer.on("self-update:log", handler);
+    return () => ipcRenderer.removeListener("self-update:log", handler);
+  },
+});
