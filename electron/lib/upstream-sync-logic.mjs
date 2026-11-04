@@ -229,6 +229,18 @@ ${files}
 These files exist because of the fork, so they are where upstream changes collide with it:
 ${FORK_FILES.map((f) => `- ${f}`).join("\n")}
 
+Before anything else: if \`src/i18n/translation.json\` is in the conflicted list, resolve it with
+the fork's own key-level merger instead of editing that file by hand:
+
+\`\`\`
+node scripts/resolve-translation-conflict.mjs
+\`\`\`
+
+It merges both sides' keys (the fork's keys are the ones named \`SELF_UPDATE$*\` and \`SYNC$*\`),
+stages the file and prints what it did. Exit 0 = done, run \`git rebase --continue\`. Exit 1 = a few
+keys were changed differently on both sides; it prints their names, leaves the file untouched and
+only those keys need your hand. Exit 2 = that file was not conflicted, so ignore this step.
+
 ## Rules
 
 1. Keep the fork's behaviour. Re-apply the fork's changes on top of upstream's,

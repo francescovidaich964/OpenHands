@@ -293,6 +293,17 @@ describe("syncTaskText", () => {
     expect(text).toContain("npm run check-translation-completeness");
   });
 
+  it("sends the agent to the fork's i18n merger before it edits anything", () => {
+    expect(text).toContain("node scripts/resolve-translation-conflict.mjs");
+    expect(text).toContain(
+      "src/i18n/translation.json` is in the conflicted list",
+    );
+    // The shortcut has to come before the rules it replaces for that file.
+    expect(text.indexOf("resolve-translation-conflict.mjs")).toBeLessThan(
+      text.indexOf("## Rules"),
+    );
+  });
+
   it("says so when git listed no files", () => {
     const t = syncTaskText({
       repoPath: "R",

@@ -259,6 +259,20 @@ export function UpstreamSyncPanel({
         </div>
       )}
 
+      {data.autoMerge && (
+        <p
+          data-testid="upstream-sync-auto-merge"
+          className="break-words text-xs text-muted"
+        >
+          {data.autoMerge.conflicts.length > 0 || data.autoMerge.error
+            ? t(I18nKey.SYNC$TRANSLATION_LEFT, {
+                reason:
+                  data.autoMerge.conflicts.join(", ") || data.autoMerge.error,
+              })
+            : t(I18nKey.SYNC$AUTO_MERGED, { keys: data.autoMerge.keys })}
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <BrandButton
           testId="upstream-sync-check-button"

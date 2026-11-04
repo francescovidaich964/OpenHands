@@ -27,6 +27,10 @@ import {
   AGENT_WRAPPER_PS1,
 } from "./lib/agent-launch-script.mjs";
 import {
+  TRANSLATION_FILE,
+  mergeTranslations,
+} from "./lib/translation-merge.mjs";
+import {
   AGENT_LABELS,
   agentCommandLine,
   backupBranchName,
@@ -417,6 +421,8 @@ export function registerUpstreamSync({
       lastFetchMs: state.lastFetchMs ?? null,
       // Display only: the push that ended the last sync.
       lastSync: state.lastSync ?? null,
+      // Display only: what the i18n auto-merge did for this sync (null = it never ran).
+      autoMerge: state.sync?.autoMerge ?? null,
       // A refused auto-build is worth repeating only until the next build attempt:
       // any build that started after it (either button) answers the same question.
       autoBuildError:
@@ -491,6 +497,21 @@ export function registerUpstreamSync({
       current = { ...current, sync: null };
       recordCleared = true;
       facts = await collectFacts(repo, null);
+    }
+    // The same resolver the Start button runs, so opening the panel while a rebase is stopped on the
+    // i18n file alone finishes it instead of asking for help. Never while an agent works the
+    // conflicts: it may be mid-edit, and its task text tells it to run the same CLI itself.
+    if (
+      repo &&
+      !busy &&
+      facts.rebaseInProgress &&
+      facts.conflictedFiles.includes(TRANSLATION_FILE) &&
+      !pidAlive(current.sync?.agent?.pid ?? 0)
+    ) {
+      if (await autoResolveTranslations(repo)) {
+        current = readState();
+        facts = await collectFacts(repo, current.sync?.latestTag ?? null);
+      }
     }
     const payload = await buildPayload(current, facts);
     return {
@@ -680,7 +701,13 @@ export function registerUpstreamSync({
         gitEnv(),
         REBASE_TIMEOUT_MS,
       );
-      const after = await collectFacts(repo, facts.latestTag);
+      let after = await collectFacts(repo, facts.latestTag);
+      // Every sync of this fork stops on one file (the i18n file both sides append to). Take it out
+      // of the way before deciding the rebase needs a human.
+      const autoMerge = after.rebaseInProgress
+        ? await autoResolveTranslations(repo)
+        : null;
+      if (autoMerge) after = await collectFacts(repo, facts.latestTag);
       if (after.rebaseInProgress) {
         // Conflicts: the rebase stays paused for the agent or the user.
         return {
@@ -690,9 +717,12 @@ export function registerUpstreamSync({
           targetTag: facts.latestTag,
           backupBranch,
           error: fetchError,
+          autoMerge,
         };
       }
-      if (!rebase.ok) {
+      // `rebase.ok` is false whenever git stopped for a conflict — including one this resolver just
+      // cleared. Only a branch that still does not hold the target really failed.
+      if (!rebase.ok && !after.branchContainsTarget) {
         // Never got as far as pausing: drop the record so the panel does not
         // offer actions for a sync that did not happen. The backup branch
         // stays behind (harmless, and it is the recovery point if git moved
@@ -725,11 +755,155 @@ export function registerUpstreamSync({
         targetTag: facts.latestTag,
         backupBranch,
         error: fetchError,
+        autoMerge,
       };
     } finally {
       busy = false;
     }
   });
+
+  // ── the i18n file every sync conflicts on ───────────────────────────────────
+
+  /**
+   * How many times one sync may auto-resolve the translation file. A rebase replays one commit at a
+   * time, so the file can conflict once per replayed fork commit; the fork has a handful. More than
+   * this means git is not making progress, which is a bug to stop on rather than spin over.
+   */
+  const MAX_AUTO_RESOLVE_STEPS = 50;
+
+  /** Conflicted files of a paused rebase; [] when git cannot answer. */
+  async function conflictedList(repo) {
+    const r = await run(
+      "git",
+      ["diff", "--name-only", "--diff-filter=U"],
+      repo,
+      gitEnv(),
+    );
+    return r.ok
+      ? r.stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      : [];
+  }
+
+  /**
+   * Merge the file's three index stages with the same function the CLI uses
+   * (`scripts/resolve-translation-conflict.mjs`) and stage the result, so the app, an agent and a
+   * human at a terminal always reach the same answer.
+   */
+  async function mergeTranslationFile(repo) {
+    const [base, ours, theirs] = await Promise.all(
+      [1, 2, 3].map((stage) =>
+        run("git", ["show", `:${stage}:${TRANSLATION_FILE}`], repo, gitEnv()),
+      ),
+    );
+    // No stage 2 or 3 means one side deleted the file as a whole: a human decision, not a key merge.
+    if (!ours.ok || !theirs.ok) {
+      return {
+        ok: false,
+        keys: 0,
+        conflicts: [],
+        error:
+          "one side has no version of the file (it was added or deleted as a whole)",
+      };
+    }
+    const merged = mergeTranslations(
+      base.ok ? base.stdout : null,
+      ours.stdout,
+      theirs.stdout,
+    );
+    if (!merged.ok) {
+      return {
+        ok: false,
+        keys: 0,
+        conflicts: merged.conflicts,
+        error: merged.error,
+      };
+    }
+    try {
+      writeFileSync(join(repo, TRANSLATION_FILE), merged.text, "utf8");
+    } catch (err) {
+      return {
+        ok: false,
+        keys: 0,
+        conflicts: [],
+        error: `writing the merged file failed: ${err.message}`,
+      };
+    }
+    const staged = await run(
+      "git",
+      ["add", "--", TRANSLATION_FILE],
+      repo,
+      gitEnv(),
+    );
+    if (!staged.ok) {
+      return {
+        ok: false,
+        keys: 0,
+        conflicts: [],
+        error: `git add failed: ${staged.error}`,
+      };
+    }
+    return {
+      ok: true,
+      keys: merged.added.length + merged.changed.length,
+      conflicts: [],
+      error: null,
+    };
+  }
+
+  /**
+   * Resolve that file at every stop of a paused rebase, and keep the rebase moving while it is the
+   * ONLY conflict. Anything else leaves the rebase stopped where it is, for the agent or the user:
+   * this never resolves a real code conflict, and never continues past one.
+   *
+   * Returns null when there was nothing of ours to do, so callers do not show a notice for a sync
+   * that never touched the file.
+   */
+  async function autoResolveTranslations(repo) {
+    if (!repo) return null;
+    const summary = { stops: 0, keys: 0, conflicts: [], error: null, ms: 0 };
+    const started = Date.now();
+    for (let step = 0; step < MAX_AUTO_RESOLVE_STEPS; step += 1) {
+      const files = await conflictedList(repo);
+      if (!files.includes(TRANSLATION_FILE)) break;
+      const merged = await mergeTranslationFile(repo);
+      if (!merged.ok) {
+        summary.conflicts = merged.conflicts;
+        summary.error = merged.error;
+        break;
+      }
+      summary.stops += 1;
+      summary.keys += merged.keys;
+      // Another file still conflicts: stopping the rebase there is correct, this only clears the tail.
+      if (files.length > 1) break;
+      const next = await run(
+        "git",
+        ["rebase", "--continue"],
+        repo,
+        gitEnv(),
+        REBASE_TIMEOUT_MS,
+      );
+      if (!next.ok) {
+        summary.error = `git rebase --continue failed: ${next.error}`;
+        break;
+      }
+      if (!(await rebaseState(repo)).paused) break;
+    }
+    if (!summary.stops && !summary.conflicts.length && !summary.error)
+      return null;
+
+    summary.ms = Date.now() - started;
+    const fresh = readState();
+    if (fresh.sync) {
+      saveState({
+        ...fresh,
+        sync: { ...fresh.sync, autoMerge: summary },
+      });
+    }
+    return summary;
+  }
 
   // ── conflicts ───────────────────────────────────────────────────────────────
 

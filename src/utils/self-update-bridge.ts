@@ -113,6 +113,21 @@ export interface SyncPayload {
     pushedMs: number;
     backupBranch: string | null;
   } | null;
+  /**
+   * Display only: what the key-level merge of `src/i18n/translation.json` did during this sync —
+   * the one conflict every sync of this fork has. Null when the resolver never ran.
+   */
+  autoMerge: {
+    /** How many rebase stops it cleared. */
+    stops: number;
+    /** Fork keys it took (added plus updated). */
+    keys: number;
+    /** Keys both sides changed differently, so it left the file for a human. */
+    conflicts: string[];
+    /** Why it stopped (null when it did all it could). */
+    error: string | null;
+    ms: number;
+  } | null;
   /** Why the build the last clean rebase started never ran; null when fine. */
   autoBuildError: string | null;
   /** True on the payload that dropped a stale record (rebase resolved outside). */

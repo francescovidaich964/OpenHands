@@ -40696,5 +40696,41 @@
     "tr": "yüklü",
     "uk": "встановлено",
     "id": "terpasang"
+  },
+  "SYNC$AUTO_MERGED": {
+    "en": "translation.json auto-merged ({{keys}} keys from the fork)",
+    "ja": "translation.json を自動マージしました（フォークからキー {{keys}} 件）",
+    "zh-CN": "translation.json 已自动合并（来自该分支的 {{keys}} 个键）",
+    "zh-TW": "translation.json 已自動合併（來自該分支的 {{keys}} 個鍵）",
+    "ko-KR": "translation.json을 자동 병합했습니다(포크에서 키 {{keys}}개)",
+    "no": "translation.json ble slått sammen automatisk ({{keys}} nøkler fra forgreningen)",
+    "ar": "تم دمج translation.json تلقائيًا ({{keys}} مفاتيح من النسخة)",
+    "de": "translation.json automatisch zusammengeführt ({{keys}} Schlüssel aus dem Fork)",
+    "fr": "translation.json fusionné automatiquement ({{keys}} clés issues du fork)",
+    "it": "translation.json unito automaticamente ({{keys}} chiavi dal fork)",
+    "pt": "translation.json mesclado automaticamente ({{keys}} chaves do fork)",
+    "es": "translation.json fusionado automáticamente ({{keys}} claves del fork)",
+    "ca": "translation.json fusionat automàticament ({{keys}} claus del fork)",
+    "tr": "translation.json otomatik birleştirildi (forktan {{keys}} anahtar)",
+    "uk": "translation.json об'єднано автоматично ({{keys}} ключів із форку)",
+    "id": "translation.json digabung otomatis ({{keys}} kunci dari fork)"
+  },
+  "SYNC$TRANSLATION_LEFT": {
+    "en": "translation.json left for you: {{reason}}",
+    "ja": "translation.json は変更せずに残しました（手動対応が必要です）: {{reason}}",
+    "zh-CN": "translation.json 保留待你处理：{{reason}}",
+    "zh-TW": "translation.json 保留待你處理：{{reason}}",
+    "ko-KR": "translation.json을 그대로 남겼습니다(직접 처리해야 함): {{reason}}",
+    "no": "translation.json er latt være til deg: {{reason}}",
+    "ar": "تُرك ملف translation.json لك: {{reason}}",
+    "de": "translation.json bleibt für Sie: {{reason}}",
+    "fr": "translation.json laissé en attente : {{reason}}",
+    "it": "translation.json lasciato a te: {{reason}}",
+    "pt": "translation.json deixado para você: {{reason}}",
+    "es": "translation.json queda pendiente para usted: {{reason}}",
+    "ca": "translation.json queda pendent per a tu: {{reason}}",
+    "tr": "translation.json size bırakıldı: {{reason}}",
+    "uk": "translation.json залишено для вас: {{reason}}",
+    "id": "translation.json dibiarkan untuk Anda: {{reason}}"
   }
 }

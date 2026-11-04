@@ -125,6 +125,8 @@ Model of the fork: `main` = an upstream release tag (or an upstream `main` snaps
 | `scripts/write-build-info.mjs` | also records `upstreamTag` = `git describe --tags --abbrev=0 --match "v[0-9]*"` (the release the build sits on) |
 | `electron/upstream-sync.mjs` (new) | IPC `sync:check`, `sync:start`, `sync:agent`, `sync:abort`, `sync:discard`, `sync:push`, `sync:state`; state persisted in `<userData>/upstream-sync.json` so it survives the restart-to-install |
 | `electron/lib/upstream-sync-logic.mjs` (new, + tests) | pure rules: newest release tag (`^v\d+\.\d+\.\d+$`, semver order), backup branch names, conflict-task text, agent command lines, push preconditions, phase from repo facts |
+| `electron/lib/translation-merge.mjs` (new, + tests) | key-level merge of `src/i18n/translation.json`, the file almost every sync conflicts on, from git's three stages; keeps upstream's formatting |
+| `scripts/resolve-translation-conflict.mjs` (new) | the same merge as a CLI for a rebase in progress: exit 0 resolved and staged, 1 real key conflicts left, 2 nothing to do |
 | `src/components/features/settings/upstream-sync-panel.tsx` (new, + tests) | the sync UI inside the Custom build card |
 | `agent-canvas-update-card.tsx` (upstream file) | in the desktop app the sidebar card shows the upstream-release check instead of npm; its modal links to Settings > Application. Diff kept to a wrapper |
 
@@ -153,6 +155,27 @@ The panel shows the generated task (repo, branch, target tag, backup branch, con
 - **Abort sync**: `git rebase --abort` (disabled while an agent runs).
 - The panel polls: when no rebase is in progress, the branch contains `latestTag` and the tree is clean, phase becomes `rebased` and Build is enabled; if the agent exits with the rebase still in progress, the panel says so and keeps Abort / Copy task available.
 
+### translation.json
+
+`src/i18n/translation.json` is one ~2,200 key file that both sides append to, so it conflicts on
+almost every sync. It is merged by key instead of by hand:
+
+- `electron/lib/translation-merge.mjs` reads git's three stages (`:1:` base, `:2:` ours = the new
+  upstream base, `:3:` theirs = the fork commit) and merges level by level: a key only one side has
+  is kept, a key only one side changed keeps that change, a key both sides changed the same way is
+  fine. Anything else (both sides changed a key to different values, either side deleted a key the
+  other changed, a key that is an object on one side and a string on the other) is reported as a key
+  conflict and nothing is written. The result is upstream's text with the fork's keys inserted in it,
+  so key order, formatting and escapes stay upstream's: a `JSON.stringify` rewrite of the whole file
+  is refused.
+- `electron/upstream-sync.mjs` runs it at every rebase stop, in a loop capped at 50 steps, and only
+  continues the rebase when `translation.json` was the only conflicted file. The panel then shows
+  `SYNC$AUTO_MERGED` ("translation.json auto-merged (N keys from the fork)"); when keys really
+  conflict it shows `SYNC$TRANSLATION_LEFT` with the key names and the rest of the conflict flow
+  works as before. It is skipped while an agent is running: the agent owns the tree then.
+- By hand (or from the conflict task, which tells the agent to run it first):
+  `node scripts/resolve-translation-conflict.mjs`, same rules, exit 0 / 1 / 2 as in the table above.
+
 ### After the install
 
 Phase `installed` = the running build's `commitSha` == the branch HEAD and the branch contains `latestTag`. The panel then offers:
@@ -173,6 +196,7 @@ Unit tests for the logic module and the panel. End to end on the installed app w
 1. `git fetch upstream --tags`; pick the newest release tag (`gh release list --repo OpenHands/OpenHands --limit 5`).
 2. `git branch backup/self-update-$(date +%Y%m%d)`
 3. `git rebase <new-tag>` on `custom/self-update`. Likely conflict spots: `electron/main.mjs`, `electron/preload-main.cjs`, `src/routes/app-settings.tsx`, `agent-canvas-update-card.tsx`, the end of `src/i18n/translation.json`, and the `build:desktop` line in `package.json`. Re-check `electron/main.mjs` still quits via `before-quit` -> SIGTERM handler (that is what stops the backend before the installer runs).
+   At each stop run `node scripts/resolve-translation-conflict.mjs` first: it resolves `translation.json` by key (0 = resolved and staged, `git rebase --continue`; 1 = a real key clash, resolve those by hand; 2 = the file was not the conflict).
 4. Run the checks: `npm run lint`, `npx vitest run electron src/components/features/settings`, `npm run check-translation-completeness`; smoke test with `npm run desktop`.
 5. With approval: `git push --force-with-lease origin custom/self-update`. Then click **Build** in the installed app (it typechecks first, ~1.5 min, then builds, ~4 min), then **Restart to install** (~1.5-2 min until the app is back). Check the card's "Last install attempt" block or `install.log` for `installer exit code: 0` and `relaunched`.
 6. If the rebase changed `electron/self-update.mjs` or the helper, the new code only runs from the next install; do one more Build + Restart to install if you need it active.

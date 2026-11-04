@@ -27,6 +27,7 @@ function payload(overrides: Partial<SyncPayload> = {}): SyncPayload {
     lastFetchMs: 1,
     building: false,
     agent: null,
+    autoMerge: null,
     repoPath: "C:\\Projects\\personal\\OpenHands",
     branch: "custom/upstream-sync",
     headSha: "bbbbbbbbbb2222",

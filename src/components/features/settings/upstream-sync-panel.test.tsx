@@ -62,6 +62,7 @@ function payload(overrides: Partial<SyncPayload> = {}): SyncPayload {
     branchContainsTarget: false,
     taskText: "Resolve the rebase of custom/upstream-sync onto v1.35.0.",
     lastSync: null,
+    autoMerge: null,
     autoBuildError: null,
     syncRecordCleared: false,
     clearedBackup: null,
@@ -178,6 +179,58 @@ describe("UpstreamSyncPanel", () => {
     expect(screen.getByTestId("upstream-sync-agent-button")).toBeEnabled();
     fireEvent.change(select, { target: { value: "claude" } });
     expect(screen.getByTestId("upstream-sync-agent-button")).toBeDisabled();
+  });
+
+  it("says the i18n file was auto-merged, with the fork's key count", async () => {
+    installBridge(
+      payload({
+        phase: "conflict",
+        rebaseInProgress: true,
+        conflictedFiles: ["electron/main.mjs"],
+        autoMerge: { stops: 2, keys: 55, conflicts: [], error: null, ms: 12 },
+      }),
+    );
+    render(<UpstreamSyncPanel />);
+    // Tests do not load the translation files, so this names the branch that rendered.
+    expect(
+      await screen.findByTestId("upstream-sync-auto-merge"),
+    ).toHaveTextContent("SYNC$AUTO_MERGED");
+  });
+
+  it("says when the merge left the i18n file for the user", async () => {
+    installBridge(
+      payload({
+        phase: "conflict",
+        rebaseInProgress: true,
+        conflictedFiles: ["src/i18n/translation.json"],
+        autoMerge: {
+          stops: 0,
+          keys: 0,
+          conflicts: ["SYNC$START"],
+          error: null,
+          ms: 3,
+        },
+      }),
+    );
+    render(<UpstreamSyncPanel />);
+    expect(
+      await screen.findByTestId("upstream-sync-auto-merge"),
+    ).toHaveTextContent("SYNC$TRANSLATION_LEFT");
+  });
+
+  it("says nothing about the i18n merge when it never ran", async () => {
+    installBridge(
+      payload({
+        phase: "conflict",
+        rebaseInProgress: true,
+        conflictedFiles: ["electron/main.mjs"],
+      }),
+    );
+    render(<UpstreamSyncPanel />);
+    await screen.findByTestId("upstream-sync-conflict-files");
+    expect(
+      screen.queryByTestId("upstream-sync-auto-merge"),
+    ).not.toBeInTheDocument();
   });
 
   it("copies the task text to the clipboard", async () => {
