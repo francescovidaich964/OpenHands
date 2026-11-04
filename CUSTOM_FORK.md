@@ -132,13 +132,13 @@ Settings (optional) in `<userData>/self-update.json` (already holds `repoPath`):
 
 ### Check
 
-`git fetch <upstreamRemote> --tags --prune` (only on an explicit Check or at most every 6 h), then: `latestTag` = highest release tag; `updateAvailable` = `latestTag` is not an ancestor of the clone's `syncBranch`. Shown: installed build's `upstreamTag`, clone's base tag, `latestTag`, number of fork commits (`git rev-list --count <branch> --not --remotes=<upstreamRemote>`).
+`git fetch <upstreamRemote> "+refs/tags/v*:refs/tags/v*" "+refs/heads/main:refs/remotes/<upstreamRemote>/main"` (only on an explicit Check or at most every 6 h). Not `--tags`: a clashing local tag makes git refuse the whole fetch. Not `--prune`: it would delete local tags upstream does not have. Then: `latestTag` = highest `vX.Y.Z` tag merged into `<upstreamRemote>/main` (a maintenance release cut on an unmerged branch is not offered); `updateAvailable` = `latestTag` is not an ancestor of the clone's `syncBranch`. Shown: installed build's `upstreamTag`, clone's base tag, `latestTag`, number of fork commits (`git rev-list --count <branch> --not --remotes=<upstreamRemote>`).
 
 ### Sync & install
 
 Preconditions (refused with a message otherwise): Windows, packaged app, clone checked out on `syncBranch`, clean tree, no rebase in progress, no build running.
 
-1. `git fetch <upstreamRemote> --tags`; re-resolve `latestTag`.
+1. The same fetch as the Check; re-resolve `latestTag`.
 2. `git branch backup/<branch>-<yyyymmdd-HHMMss>` at HEAD (recorded in the state file).
 3. `git rebase <latestTag>` with `GIT_EDITOR=true`.
 4. Clean: phase `rebased`, then the normal Build runs automatically (typecheck + build:desktop) and offers Restart to install.

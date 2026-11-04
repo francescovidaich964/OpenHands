@@ -2,7 +2,8 @@
  * "Custom build" self-update for the desktop app (fork-only feature).
  *
  * Builds a new installer from the local clone this app was built from
- * (`npm run typecheck && npm run build:desktop`), archives it, and installs it
+ * (`npm run make-i18n && npm run typecheck && npm run build:desktop`), archives
+ * it, and installs it
  * through a PowerShell helper that outlives the app. The renderer drives it through the
  * `agentCanvasSelfUpdate` bridge in preload-main.cjs. Everything here is
  * self-contained so upstream files only need a one-line registration.
@@ -64,10 +65,16 @@ const CHANNEL = {
 };
 
 const LOG_FLUSH_MS = 100;
-const OVERRIDE_FILE = "self-update.json";
+export const OVERRIDE_FILE = "self-update.json";
 // The vite build strips types without checking them, so a commit with a type
-// error would otherwise build and install fine.
-const BUILD_COMMAND = "npm run typecheck && npm run build:desktop";
+// error would otherwise build and install fine. make-i18n first: it regenerates
+// src/i18n/declaration.ts from translation.json, which typecheck and build both
+// need when a rebase brought new keys in. A function, not a constant: the sync
+// module reads it for the task file, and a constant here would mean a second
+// copy of the command that silently goes stale.
+export function buildCommand() {
+  return "npm run make-i18n && npm run typecheck && npm run build:desktop";
+}
 const HELPER_LAUNCH_TIMEOUT_MS = 30_000;
 
 export function getArchiveDir() {
@@ -77,7 +84,8 @@ export function getArchiveDir() {
   return join(base, "AgentCanvasBuilds");
 }
 
-function readJson(path) {
+/** Parsed JSON file, null when it is missing or unreadable. */
+export function readJson(path) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
@@ -85,7 +93,8 @@ function readJson(path) {
   }
 }
 
-function readText(path) {
+/** File text without a UTF-8 BOM, "" when it is missing. */
+export function readText(path) {
   try {
     return readFileSync(path, "utf8").replace(/^\uFEFF/, "");
   } catch {
@@ -93,7 +102,11 @@ function readText(path) {
   }
 }
 
-async function run(cmd, args, cwd, env, timeout = 0) {
+/**
+ * Run a program with an argument array (never a shell string) and swallow the
+ * error into the result. Shared with the upstream sync (../upstream-sync.mjs).
+ */
+export async function run(cmd, args, cwd, env, timeout = 0) {
   try {
     const { stdout } = await execFileAsync(cmd, args, {
       cwd,
@@ -112,7 +125,8 @@ async function run(cmd, args, cwd, env, timeout = 0) {
   }
 }
 
-async function onPath(cmd) {
+/** Whether `cmd` resolves on PATH. */
+export async function onPath(cmd) {
   const r = await run(process.platform === "win32" ? "where.exe" : "which", [
     cmd,
   ]);
@@ -323,7 +337,12 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     return build.result;
   };
 
-  handle(CHANNEL.build, async () => {
+  /**
+   * The Build button's work: guard, run the build, archive the installer.
+   * Shared with the upstream sync, which starts the same build after a clean
+   * rebase (see ../upstream-sync.mjs) — behaviour must stay identical.
+   */
+  const startBuild = async () => {
     if (!supported) return { ok: false, error: "Only supported on Windows" };
     if (build.running)
       return { ok: false, error: "A build is already running" };
@@ -342,11 +361,12 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     build.result = null;
     build.startedMs = Date.now();
     const startedMs = build.startedMs;
-    pushLines([`> ${BUILD_COMMAND}  (${repo})`]);
+    const command = buildCommand();
+    pushLines([`> ${command}  (${repo})`]);
 
     return new Promise((resolvePromise) => {
       // shell:true — on Windows npm is npm.cmd, which spawn() will not run directly.
-      const child = spawn(BUILD_COMMAND, {
+      const child = spawn(command, {
         cwd: repo,
         shell: true,
         windowsHide: true,
@@ -376,7 +396,9 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
         void finishBuild(code, repo, startedMs).then(resolvePromise);
       });
     });
-  });
+  };
+
+  handle(CHANNEL.build, startBuild);
 
   // ── cancel ──────────────────────────────────────────────────────────────────
   handle(CHANNEL.cancel, async () => {
@@ -461,4 +483,16 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     setTimeout(() => app.quit(), 200);
     return { ok: true, helperPid };
   });
+
+  return {
+    /** Same build the Build button runs (used by the upstream sync). */
+    startBuild,
+    isBuildRunning: () => build.running,
+    /** When the current (or last) build started, 0 before the first one. */
+    buildStartedMs: () => build.startedMs,
+    /** Contents of electron/build-info.json, null when absent. */
+    buildInfo,
+    /** Which clone this app belongs to (override file wins over build time). */
+    repoPath,
+  };
 }

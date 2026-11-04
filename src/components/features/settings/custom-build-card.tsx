@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 import { BrandButton } from "#/components/features/settings/brand-button";
 import { I18nKey } from "#/i18n/declaration";
+import { UpstreamSyncPanel } from "#/components/features/settings/upstream-sync-panel";
 import {
   getSelfUpdateBridge,
   type SelfUpdateArchiveEntry,
@@ -11,6 +12,8 @@ import {
 } from "#/utils/self-update-bridge";
 
 const MAX_LOG_LINES = 2000;
+/** Re-read the main process while a build it started could be finishing. */
+const BUILD_POLL_MS = 5000;
 const FAILURE_LOG_LINES = 50;
 const SHORT_SHA = 10;
 
@@ -55,15 +58,26 @@ function CustomBuildCardInner() {
   // `adoptBuild`: take the main process's build state (running / log / last
   // result) — on mount, so the card reattaches after navigating away. After a
   // build this card already holds the fresh result and log.
+  // `expectRunning`: the caller believes a build is running (the poll). See the
+  // guard below.
   const refresh = useCallback(
-    async (adoptBuild: boolean) => {
+    async (adoptBuild: boolean, expectRunning = false) => {
       const s = await bridge.status();
       setStatus(s);
       if (adoptBuild && s.build) {
-        setBuilding(s.build.running);
-        setLog(s.build.log);
-        setResult(s.build.result);
-        if (s.build.running) setLogOpen(true);
+        // A build that just finished reads running:false for a moment *before* its
+        // result is stored (self-update.mjs still reads the sha in between).
+        // Adopting that pair would end the poll and leave the card with nothing to
+        // show, so while a build is expected only a running build or a real result
+        // may end it.
+        const keepWaiting =
+          expectRunning && !s.build.running && !s.build.result;
+        if (!keepWaiting) {
+          setBuilding(s.build.running);
+          setLog(s.build.log);
+          setResult(s.build.result);
+          if (s.build.running) setLogOpen(true);
+        }
       }
       const a = await bridge.listArchive();
       const entries = a.archive ?? [];
@@ -85,6 +99,18 @@ function CustomBuildCardInner() {
       setLog((prev) => [...prev, ...lines].slice(-MAX_LOG_LINES)),
     );
   }, [bridge, refresh]);
+
+  // The upstream sync starts a build this card did not ask for (it only says
+  // "a build started"). Keep adopting the main process's build state while one is
+  // running, so the card also learns when that build ended and what it returned.
+  useEffect(() => {
+    if (!building) return;
+    const id = window.setInterval(
+      () => void refresh(true, true),
+      BUILD_POLL_MS,
+    );
+    return () => window.clearInterval(id);
+  }, [building, refresh]);
 
   const build = async () => {
     setBuilding(true);
@@ -314,6 +340,13 @@ function CustomBuildCardInner() {
           {installError}
         </p>
       )}
+
+      <UpstreamSyncPanel
+        onBuildStarted={() => {
+          setBuilding(true);
+          setLogOpen(true);
+        }}
+      />
 
       <div className="flex flex-col gap-2 border-t border-border pt-3">
         <span className="text-xs font-medium text-contrast">

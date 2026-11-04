@@ -10,6 +10,7 @@ import {
   MODAL_MAX_WIDTH_VIEWPORT,
   MODAL_WIDTH_CLASS,
 } from "#/components/shared/modals/modal-body";
+import type { SyncPayload } from "#/utils/self-update-bridge";
 import { AgentCanvasUpdateCard } from "./agent-canvas-update-card";
 
 const { fetchLatestVersionMock, getLockedCloudHostMock } = vi.hoisted(() => ({
@@ -205,5 +206,91 @@ describe("AgentCanvasUpdateCard", () => {
       screen.queryByTestId("agent-canvas-update-card"),
     ).not.toBeInTheDocument();
     expect(fetchLatestVersionMock).not.toHaveBeenCalled();
+  });
+});
+
+// Fork wrapper: with the desktop bridge present the sidebar shows the upstream
+// sync status instead of the npm card, and the registry is never queried. The
+// tests above (no bridge) are the browser path.
+describe("AgentCanvasUpdateCard with the desktop bridge", () => {
+  // Only the fields the compact card reads.
+  const syncPayload = {
+    ok: true,
+    supported: true,
+    phase: "available",
+    latestTag: "v1.35.0",
+    forkCommitCount: 3,
+    settings: {
+      syncBranch: "custom/upstream-sync",
+      upstreamRemote: "upstream",
+      forkRemote: "origin",
+      opencodeModel: "grok",
+    },
+  } as SyncPayload;
+
+  beforeEach(() => {
+    window.agentCanvasSelfUpdate = {
+      status: vi.fn().mockResolvedValue({ ok: true }),
+      build: vi.fn().mockResolvedValue({ ok: true }),
+      cancel: vi.fn().mockResolvedValue({ ok: true }),
+      install: vi.fn().mockResolvedValue({ ok: true }),
+      listArchive: vi.fn().mockResolvedValue({ ok: true }),
+      onLog: vi.fn().mockReturnValue(() => {}),
+      syncState: vi.fn().mockResolvedValue(syncPayload),
+      syncCheck: vi.fn().mockResolvedValue(syncPayload),
+      syncStart: vi.fn().mockResolvedValue({ ok: true }),
+      syncAgent: vi.fn().mockResolvedValue({ ok: true }),
+      syncAbort: vi.fn().mockResolvedValue({ ok: true }),
+      syncDiscard: vi.fn().mockResolvedValue({ ok: true }),
+      syncPush: vi.fn().mockResolvedValue({ ok: true }),
+    };
+  });
+
+  afterEach(() => {
+    delete window.agentCanvasSelfUpdate;
+  });
+
+  it("shows the upstream sync card and skips the npm registry check", async () => {
+    renderCard();
+
+    expect(
+      await screen.findByTestId("upstream-sync-sidebar"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("agent-canvas-update-card"),
+    ).not.toBeInTheDocument();
+    expect(fetchLatestVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("hands its own props to the card it picked", async () => {
+    // The wrapper renders either card with the same props, so `hideWhenUpToDate`
+    // means the same thing on a desktop build as it does in the browser.
+    const upToDate = {
+      ...syncPayload,
+      phase: "upToDate",
+      state: null,
+      lastSync: null,
+    } as SyncPayload;
+    vi.mocked(window.agentCanvasSelfUpdate!.syncState).mockResolvedValue(
+      upToDate,
+    );
+    vi.mocked(window.agentCanvasSelfUpdate!.syncCheck).mockResolvedValue(
+      upToDate,
+    );
+
+    const shown = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AgentCanvasUpdateCard />
+      </QueryClientProvider>,
+    );
+    await shown.findByTestId("upstream-sync-sidebar");
+    shown.unmount();
+
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AgentCanvasUpdateCard hideWhenUpToDate />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 });
