@@ -57,6 +57,7 @@ import { spawnSync } from "node:child_process";
 import { isExternalBrowsableUrl, isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
 import { resolveBundledRuntimeDir } from "./lib/bundled-runtime-dir.mjs";
 import { registerSelfUpdate } from "./self-update.mjs";
+import { registerUpstreamSync } from "./upstream-sync.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -778,8 +779,29 @@ app.whenReady().then(async () => {
   });
   marsTunnelBridge.registerIpc(ipcMain);
 
-  // Fork-only: "Custom build" rebuild & install (see self-update.mjs).
-  registerSelfUpdate({ app, ipcMain, getMainWindow: () => mainWin });
+  // Fork-only: "Custom build" rebuild & install, and the upstream sync on top of
+  // it (see self-update.mjs / upstream-sync.mjs). A throw here must not stop the
+  // app from starting: both only add features to the settings screen.
+  try {
+    const selfUpdate = registerSelfUpdate({
+      app,
+      ipcMain,
+      getMainWindow: () => mainWin,
+    });
+
+    registerUpstreamSync({
+      app,
+      ipcMain,
+      getMainWindow: () => mainWin,
+      startBuild: selfUpdate.startBuild,
+      isBuildRunning: selfUpdate.isBuildRunning,
+      buildStartedMs: selfUpdate.buildStartedMs,
+      buildInfo: selfUpdate.buildInfo,
+      repoPath: selfUpdate.repoPath,
+    });
+  } catch (err) {
+    console.error("[desktop] fork build/sync features are unavailable:", err);
+  }
 
   if (!uvxAvailable()) {
     dialog.showErrorBox(

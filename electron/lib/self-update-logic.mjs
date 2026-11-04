@@ -10,9 +10,6 @@ import { win32 } from "node:path";
 
 const { basename, dirname, resolve, sep } = win32;
 
-/** How many archived installers survive pruning. */
-export const ARCHIVE_KEEP = 5;
-
 /** Max lines of build output kept in memory / replayed to the renderer. */
 export const BUILD_LOG_MAX_LINES = 2000;
 
@@ -90,16 +87,29 @@ export function findNewestInstaller(entries, buildStartedMs) {
 }
 
 /**
- * Archive entries to delete so only the newest `keep` remain.
- * Only files that look like our archive names are ever considered.
+ * Archive entries to delete after a build. The archive is a rollback anchor,
+ * not a history: it keeps the installer just built (Restart to install needs
+ * it), the newest installer built from `anchorBranch` (the fork's main), and
+ * the `anchorKeep` newest of those while an upstream sync is unfinished (so
+ * the pre-sync build survives until the sync is pushed or discarded).
+ * Only files that look like our archive names are ever considered; an entry
+ * with no index record (built before the index existed) counts as not-anchor.
  *
  * @param {{name: string, mtimeMs: number}[]} entries
+ * @param {{keepName?: string, index?: Record<string, {branch?: string}>,
+ *   anchorBranch?: string, anchorKeep?: number}} opts
  */
-export function selectArchiveToPrune(entries, keep = ARCHIVE_KEEP) {
-  const ours = entries
-    .filter((e) => parseArchiveFileName(e.name))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return ours.slice(keep).map((e) => e.name);
+export function selectArchiveToPrune(
+  entries,
+  { keepName, index = {}, anchorBranch = "main", anchorKeep = 1 } = {},
+) {
+  const ours = sortArchive(entries);
+  const keep = new Set(keepName ? [keepName] : []);
+  ours
+    .filter((e) => index[e.name]?.branch === anchorBranch)
+    .slice(0, Math.max(1, anchorKeep))
+    .forEach((e) => keep.add(e.name));
+  return ours.filter((e) => !keep.has(e.name)).map((e) => e.name);
 }
 
 /** Newest first, restricted to our archive names. */

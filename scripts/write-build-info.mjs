@@ -19,10 +19,22 @@ function git(...args) {
   return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
 }
 
+/** The release this build sits on; null in a clone without tags. */
+function upstreamTag() {
+  try {
+    return (
+      git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*") || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 const info = {
   repoPath: repoRoot,
   commitSha: git("rev-parse", "HEAD"),
   branch: git("rev-parse", "--abbrev-ref", "HEAD"),
+  upstreamTag: upstreamTag(),
   buildTime: new Date().toISOString(),
 };
 

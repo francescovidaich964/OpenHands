@@ -2,7 +2,8 @@
  * "Custom build" self-update for the desktop app (fork-only feature).
  *
  * Builds a new installer from the local clone this app was built from
- * (`npm run typecheck && npm run build:desktop`), archives it, and installs it
+ * (`npm run make-i18n && npm run typecheck && npm run build:desktop`), archives
+ * it, and installs it
  * through a PowerShell helper that outlives the app. The renderer drives it through the
  * `agentCanvasSelfUpdate` bridge in preload-main.cjs. Everything here is
  * self-contained so upstream files only need a one-line registration.
@@ -34,7 +35,6 @@ import {
   INSTALL_HELPER_PS1,
 } from "./lib/install-helper-script.mjs";
 import {
-  ARCHIVE_KEEP,
   BUILD_LOG_MAX_LINES,
   archiveFileName,
   findNewestInstaller,
@@ -49,6 +49,10 @@ import {
   splitChunk,
   trimLog,
 } from "./lib/self-update-logic.mjs";
+import {
+  SYNC_STATE_FILE,
+  resolveSyncSettings,
+} from "./lib/upstream-sync-logic.mjs";
 import { isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -64,10 +68,18 @@ const CHANNEL = {
 };
 
 const LOG_FLUSH_MS = 100;
-const OVERRIDE_FILE = "self-update.json";
+export const OVERRIDE_FILE = "self-update.json";
+/** Next to the installers: `{ "<installer name>": { branch, builtMs } }`. */
+const ARCHIVE_INDEX_FILE = "archive-index.json";
 // The vite build strips types without checking them, so a commit with a type
-// error would otherwise build and install fine.
-const BUILD_COMMAND = "npm run typecheck && npm run build:desktop";
+// error would otherwise build and install fine. make-i18n first: it regenerates
+// src/i18n/declaration.ts from translation.json, which typecheck and build both
+// need when a rebase brought new keys in. A function, not a constant: the sync
+// module reads it for the task file, and a constant here would mean a second
+// copy of the command that silently goes stale.
+export function buildCommand() {
+  return "npm run make-i18n && npm run typecheck && npm run build:desktop";
+}
 const HELPER_LAUNCH_TIMEOUT_MS = 30_000;
 
 export function getArchiveDir() {
@@ -77,7 +89,8 @@ export function getArchiveDir() {
   return join(base, "AgentCanvasBuilds");
 }
 
-function readJson(path) {
+/** Parsed JSON file, null when it is missing or unreadable. */
+export function readJson(path) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
@@ -85,7 +98,8 @@ function readJson(path) {
   }
 }
 
-function readText(path) {
+/** File text without a UTF-8 BOM, "" when it is missing. */
+export function readText(path) {
   try {
     return readFileSync(path, "utf8").replace(/^\uFEFF/, "");
   } catch {
@@ -93,7 +107,11 @@ function readText(path) {
   }
 }
 
-async function run(cmd, args, cwd, env, timeout = 0) {
+/**
+ * Run a program with an argument array (never a shell string) and swallow the
+ * error into the result. Shared with the upstream sync (../upstream-sync.mjs).
+ */
+export async function run(cmd, args, cwd, env, timeout = 0) {
   try {
     const { stdout } = await execFileAsync(cmd, args, {
       cwd,
@@ -112,7 +130,8 @@ async function run(cmd, args, cwd, env, timeout = 0) {
   }
 }
 
-async function onPath(cmd) {
+/** Whether `cmd` resolves on PATH. */
+export async function onPath(cmd) {
   const r = await run(process.platform === "win32" ? "where.exe" : "which", [
     cmd,
   ]);
@@ -145,6 +164,12 @@ function listDir(dir) {
 export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
   const archiveDir = getArchiveDir();
   const supported = process.platform === "win32";
+  const readArchiveIndex = () => {
+    const index = readJson(join(archiveDir, ARCHIVE_INDEX_FILE));
+    return index && typeof index === "object" && !Array.isArray(index)
+      ? index
+      : {};
+  };
 
   /** @type {{running: boolean, child: import("node:child_process").ChildProcess | null, startedMs: number, lines: string[], cancelled: boolean, result: object | null}} */
   const build = {
@@ -300,18 +325,41 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
           await run("git", ["rev-parse", "--short", "HEAD"], repo)
         ).stdout.trim() || "0000000"; // placeholder still matches the archive-name pattern
       mkdirSync(archiveDir, { recursive: true });
-      const dest = join(archiveDir, archiveFileName(version, sha));
+      const name = archiveFileName(version, sha);
+      const dest = join(archiveDir, name);
       copyFileSync(join(outDir, installer.name), dest);
-      for (const name of selectArchiveToPrune(
-        listDir(archiveDir),
-        ARCHIVE_KEEP,
-      )) {
+      // Which branch each installer came from: pruning keeps the newest build
+      // of the anchor branch (the fork's main) as the rollback point.
+      const branch = (
+        await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], repo)
+      ).stdout.trim();
+      const index = readArchiveIndex();
+      index[name] = { branch: branch || null, builtMs: Date.now() };
+      const anchorBranch = resolveSyncSettings(
+        readJson(join(app.getPath("userData"), OVERRIDE_FILE)),
+      ).syncBranch;
+      // An unfinished upstream sync keeps the pre-sync anchor build too.
+      const syncInFlight = Boolean(
+        readJson(join(app.getPath("userData"), SYNC_STATE_FILE))?.sync,
+      );
+      for (const old of selectArchiveToPrune(listDir(archiveDir), {
+        keepName: name,
+        index,
+        anchorBranch,
+        anchorKeep: syncInFlight ? 2 : 1,
+      })) {
         try {
-          unlinkSync(join(archiveDir, name));
+          unlinkSync(join(archiveDir, old));
+          delete index[old];
         } catch {
           // best-effort: an installer that is in use stays until the next build
         }
       }
+      writeFileSync(
+        join(archiveDir, ARCHIVE_INDEX_FILE),
+        `${JSON.stringify(index, null, 2)}\n`,
+        "utf8",
+      );
       build.result = { ok: true, installerPath: dest, version, sha };
     } catch (err) {
       // e.g. the copy into the archive failed (disk full, file locked)
@@ -323,7 +371,12 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     return build.result;
   };
 
-  handle(CHANNEL.build, async () => {
+  /**
+   * The Build button's work: guard, run the build, archive the installer.
+   * Shared with the upstream sync, which starts the same build after a clean
+   * rebase (see ../upstream-sync.mjs) — behaviour must stay identical.
+   */
+  const startBuild = async () => {
     if (!supported) return { ok: false, error: "Only supported on Windows" };
     if (build.running)
       return { ok: false, error: "A build is already running" };
@@ -342,11 +395,12 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     build.result = null;
     build.startedMs = Date.now();
     const startedMs = build.startedMs;
-    pushLines([`> ${BUILD_COMMAND}  (${repo})`]);
+    const command = buildCommand();
+    pushLines([`> ${command}  (${repo})`]);
 
     return new Promise((resolvePromise) => {
       // shell:true — on Windows npm is npm.cmd, which spawn() will not run directly.
-      const child = spawn(BUILD_COMMAND, {
+      const child = spawn(command, {
         cwd: repo,
         shell: true,
         windowsHide: true,
@@ -376,7 +430,9 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
         void finishBuild(code, repo, startedMs).then(resolvePromise);
       });
     });
-  });
+  };
+
+  handle(CHANNEL.build, startBuild);
 
   // ── cancel ──────────────────────────────────────────────────────────────────
   handle(CHANNEL.cancel, async () => {
@@ -390,14 +446,17 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
   });
 
   // ── archive ─────────────────────────────────────────────────────────────────
-  const archiveEntries = () =>
-    sortArchive(listDir(archiveDir)).map((e) => ({
+  const archiveEntries = () => {
+    const index = readArchiveIndex();
+    return sortArchive(listDir(archiveDir)).map((e) => ({
       path: join(archiveDir, e.name),
       name: e.name,
       mtimeMs: e.mtimeMs,
       size: e.size,
+      branch: index[e.name]?.branch ?? null,
       ...parseArchiveFileName(e.name),
     }));
+  };
 
   handle(CHANNEL.listArchive, async () => ({
     ok: true,
@@ -461,4 +520,16 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     setTimeout(() => app.quit(), 200);
     return { ok: true, helperPid };
   });
+
+  return {
+    /** Same build the Build button runs (used by the upstream sync). */
+    startBuild,
+    isBuildRunning: () => build.running,
+    /** When the current (or last) build started, 0 before the first one. */
+    buildStartedMs: () => build.startedMs,
+    /** Contents of electron/build-info.json, null when absent. */
+    buildInfo,
+    /** Which clone this app belongs to (override file wins over build time). */
+    repoPath,
+  };
 }

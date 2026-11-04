@@ -46,7 +46,7 @@ New files (fork-only, no upstream conflicts expected):
 
 - `scripts/write-build-info.mjs`: writes git-ignored `electron/build-info.json` (`repoPath`, `commitSha`, `branch`, `buildTime`); hooked into `build:desktop` right after `build:app`. Optional override: `%APPDATA%\<app userData>\self-update.json` with `{"repoPath": "..."}` if the clone moves.
 - `electron/self-update.mjs`: IPC handlers `status`, `build`, `cancel`, `install`, `listArchive` + `self-update:log` event. Sender must be the main window's main frame on a loopback URL. Build runs `npm run typecheck && npm run build:desktop` (the vite build does not check types). `install` only accepts a file named `Agent-Canvas-Setup-<version>-<sha>.exe` directly inside `%LOCALAPPDATA%\AgentCanvasBuilds`, and only in the packaged app.
-- `electron/lib/self-update-logic.mjs` (+ `.test.mjs`): pure, unit-tested rules: archive names, installer path validation, fresh-installer discovery, pruning (keep 5), log chunking, repo-path resolution, sender trust, last helper run from `install.log`.
+- `electron/lib/self-update-logic.mjs` (+ `.test.mjs`): pure, unit-tested rules: archive names, installer path validation, fresh-installer discovery, pruning (newest build + newest `main` build), log chunking, repo-path resolution, sender trust, last helper run from `install.log`.
 - `electron/lib/install-helper-script.mjs`: the PowerShell helper (waits for app exit, then for any process under the install dir, runs `/S` with a 10 min bound, logs to `install.log`, relaunches unless the app is already running, deletes itself) and the launcher that starts it. The app runs the launcher as a short-lived child; the launcher `Start-Process`es the helper (a grandchild escapes libuv's kill-on-close job; `spawn({detached:true})` of powershell.exe was measured to run nothing), checks it is still alive after 3 s and prints its PID. The app quits only after that; otherwise it stays open and shows the error.
 - `src/utils/self-update-bridge.ts`, `src/components/features/settings/custom-build-card.tsx` (+ test).
 
@@ -110,20 +110,100 @@ Installed app (per-user, silent `/S`):
 - A Cancel that lands exactly as the build finishes reports "cancelled" although the installer was archived (it still appears in the Reinstall list).
 - The failure block shows the last 50 raw log lines; long vite warning lines can bury the actual error.
 - A fresh profile shows the first-run onboarding screen, which hides all settings routes (upstream behaviour).
-- Not tested: an install that fails (non-zero exit), a locked install dir, keep-5 pruning (only 3 archives so far), Cancel close to the end of a build.
+- Not tested: an install that fails (non-zero exit), a locked install dir, Cancel close to the end of a build.
+
+## Upstream sync from the app (design, branch `custom/upstream-sync`)
+
+Goal: the desktop app notices a newer upstream release, rebases the fork's `main` onto it, rebuilds and reinstalls itself, and (after the new build runs) pushes `main` to the fork. Conflicts are handed to an AI agent of the user's choice, or to the user as a copyable task.
+
+Model of the fork: `main` = an upstream release tag (or an upstream `main` snapshot) + a straight line of fork commits (features land as squash merges). A sync is `git rebase <newest upstream tag>` on `main`; upstream commits already in the tag are skipped by git, the fork commits are replayed.
+
+### Pieces
+
+| Piece | What |
+|---|---|
+| `scripts/write-build-info.mjs` | also records `upstreamTag` = `git describe --tags --abbrev=0 --match "v[0-9]*"` (the release the build sits on) |
+| `electron/upstream-sync.mjs` (new) | IPC `sync:check`, `sync:start`, `sync:agent`, `sync:abort`, `sync:discard`, `sync:push`, `sync:state`; state persisted in `<userData>/upstream-sync.json` so it survives the restart-to-install |
+| `electron/lib/upstream-sync-logic.mjs` (new, + tests) | pure rules: newest release tag (`^v\d+\.\d+\.\d+$`, semver order), backup branch names, conflict-task text, agent command lines, push preconditions, phase from repo facts |
+| `electron/lib/translation-merge.mjs` (new, + tests) | key-level merge of `src/i18n/translation.json`, the file almost every sync conflicts on, from git's three stages; keeps upstream's formatting |
+| `scripts/resolve-translation-conflict.mjs` (new) | the same merge as a CLI for a rebase in progress: exit 0 resolved and staged, 1 real key conflicts left, 2 nothing to do |
+| `src/components/features/settings/upstream-sync-panel.tsx` (new, + tests) | the sync UI inside the Custom build card |
+| `agent-canvas-update-card.tsx` (upstream file) | in the desktop app the sidebar card shows the upstream-release check instead of npm; its modal links to Settings > Application. Diff kept to a wrapper |
+
+Settings (optional) in `<userData>/self-update.json` (already holds `repoPath`): `syncBranch` (default `main`), `upstreamRemote` (`upstream`), `forkRemote` (`origin`), `opencodeModel` (`ax_h200/selfhosted-model#xhigh`).
+
+### Check
+
+`git fetch <upstreamRemote> "+refs/tags/v*:refs/tags/v*" "+refs/heads/main:refs/remotes/<upstreamRemote>/main"` (only on an explicit Check or at most every 6 h). Not `--tags`: a clashing local tag makes git refuse the whole fetch. Not `--prune`: it would delete local tags upstream does not have. Then: `latestTag` = highest `vX.Y.Z` tag merged into `<upstreamRemote>/main` (a maintenance release cut on an unmerged branch is not offered); `updateAvailable` = `latestTag` is not an ancestor of the clone's `syncBranch`. Shown: installed build's `upstreamTag`, clone's base tag, `latestTag`, number of fork commits (`git rev-list --count <branch> --not --remotes=<upstreamRemote>`).
+
+### Sync & install
+
+Preconditions (refused with a message otherwise): Windows, packaged app, clone checked out on `syncBranch`, clean tree, no rebase in progress, no build running.
+
+1. The same fetch as the Check; re-resolve `latestTag`.
+2. `git branch backup/<branch>-<yyyymmdd-HHMMss>` at HEAD (recorded in the state file).
+3. `git rebase <latestTag>` with `GIT_EDITOR=true`.
+4. Clean: phase `rebased`, then the normal Build runs automatically (typecheck + build:desktop) and offers Restart to install.
+5. Conflicts: phase `conflict`; the rebase stays in progress; the panel lists the conflicted files.
+
+### Conflicts
+
+The panel shows the generated task (repo, branch, target tag, backup branch, conflicted files, fork file list from this document, rules: keep the fork's behaviour, adapt it to upstream's changes, `git add` + `git rebase --continue` with `GIT_EDITOR=true` until done, then `npm run typecheck`, the self-update vitest files and `npm run check-translation-completeness`; commit fixes as new commits; never push, never reset or abort unless it cannot be resolved, then abort and explain).
+
+- **Agent** dropdown (only CLIs found on PATH are enabled): `opencode` (`opencode run --auto -m <opencodeModel> --title agent-canvas-rebase "<prompt>"`) or `Claude Code` (`claude -p "<prompt>" --permission-mode acceptEdits --allowedTools "Bash(git *)" "Bash(npm *)" "Bash(npx *)"`), started in the clone through the same detached launcher as the install helper, output to `%LOCALAPPDATA%\AgentCanvasBuilds\sync-agent-<ts>.log` (tailed in the panel). The prompt points to the task file written next to the log (no long command lines).
+- **Copy task**: the same text to the clipboard, for any agent the user runs by hand.
+- **Abort sync**: `git rebase --abort` (disabled while an agent runs).
+- The panel polls: when no rebase is in progress, the branch contains `latestTag` and the tree is clean, phase becomes `rebased` and Build is enabled; if the agent exits with the rebase still in progress, the panel says so and keeps Abort / Copy task available.
+
+### translation.json
+
+`src/i18n/translation.json` is one ~2,200 key file that both sides append to, so it conflicts on
+almost every sync. It is merged by key instead of by hand:
+
+- `electron/lib/translation-merge.mjs` reads git's three stages (`:1:` base, `:2:` ours = the new
+  upstream base, `:3:` theirs = the fork commit) and merges level by level: a key only one side has
+  is kept, a key only one side changed keeps that change, a key both sides changed the same way is
+  fine. Anything else (both sides changed a key to different values, either side deleted a key the
+  other changed, a key that is an object on one side and a string on the other) is reported as a key
+  conflict and nothing is written. The result is upstream's text with the fork's keys inserted in it,
+  so key order, formatting and escapes stay upstream's: a `JSON.stringify` rewrite of the whole file
+  is refused.
+- `electron/upstream-sync.mjs` runs it at every rebase stop, in a loop capped at 50 steps, and only
+  continues the rebase when `translation.json` was the only conflicted file. The panel then shows
+  `SYNC$AUTO_MERGED` ("translation.json auto-merged (N keys from the fork)"); when keys really
+  conflict it shows `SYNC$TRANSLATION_LEFT` with the key names and the rest of the conflict flow
+  works as before. It is skipped while an agent is running: the agent owns the tree then.
+- By hand (or from the conflict task, which tells the agent to run it first):
+  `node scripts/resolve-translation-conflict.mjs`, same rules, exit 0 / 1 / 2 as in the table above.
+
+### After the install
+
+Phase `installed` = the running build's `commitSha` == the branch HEAD and the branch contains `latestTag`. The panel then offers:
+
+- **Push to fork**: `git push --force-with-lease=<branch>:<origin sha recorded before the sync> <forkRemote> <branch>`; the backup branch is kept locally.
+- **Discard sync** (before pushing): `git reset --keep <backup>`; then Build + Restart to install returns to the old version (or Reinstall previous build from the archive, faster).
+
+### Not doing
+
+No automatic push; no sync onto upstream `main` (tags only); no interactive rebase; no sync while the clone is on another branch (feature branches are rebased by hand).
+
+### Validation plan
+
+Unit tests for the logic module and the panel. End to end on the installed app with a throwaway branch `test/sync-*` = `v1.34.0` + the fork commits (selected with `syncBranch`): clean sync to v1.35.0 → build → install → Push (to a throwaway remote branch only) → Discard on a second run; and a forced conflict handled once by each agent and once by Copy task.
 
 ## Upstream sync procedure (Phase 6)
 
 1. `git fetch upstream --tags`; pick the newest release tag (`gh release list --repo OpenHands/OpenHands --limit 5`).
 2. `git branch backup/self-update-$(date +%Y%m%d)`
 3. `git rebase <new-tag>` on `custom/self-update`. Likely conflict spots: `electron/main.mjs`, `electron/preload-main.cjs`, `src/routes/app-settings.tsx`, `agent-canvas-update-card.tsx`, the end of `src/i18n/translation.json`, and the `build:desktop` line in `package.json`. Re-check `electron/main.mjs` still quits via `before-quit` -> SIGTERM handler (that is what stops the backend before the installer runs).
+   At each stop run `node scripts/resolve-translation-conflict.mjs` first: it resolves `translation.json` by key (0 = resolved and staged, `git rebase --continue`; 1 = a real key clash, resolve those by hand; 2 = the file was not the conflict).
 4. Run the checks: `npm run lint`, `npx vitest run electron src/components/features/settings`, `npm run check-translation-completeness`; smoke test with `npm run desktop`.
 5. With approval: `git push --force-with-lease origin custom/self-update`. Then click **Build** in the installed app (it typechecks first, ~1.5 min, then builds, ~4 min), then **Restart to install** (~1.5-2 min until the app is back). Check the card's "Last install attempt" block or `install.log` for `installer exit code: 0` and `relaunched`.
 6. If the rebase changed `electron/self-update.mjs` or the helper, the new code only runs from the next install; do one more Build + Restart to install if you need it active.
 
 Locations:
 
-- Archive of installers: `%LOCALAPPDATA%\AgentCanvasBuilds\` (newest 5 kept)
+- Archive of installers: `%LOCALAPPDATA%\AgentCanvasBuilds\`. After each in-app build it keeps only the installer just built and the newest one built from the anchor branch (`syncBranch`, default `main`: the rollback point); while an upstream sync is unfinished it also keeps the previous `main` build. `archive-index.json` there records each installer's branch; installers without a record (built before the index) are pruned at the next build.
 - Install log: `%LOCALAPPDATA%\AgentCanvasBuilds\install.log`
 - Helper script (temporary, deletes itself when done): `%TEMP%\agent-canvas-install-<timestamp>.ps1`
 
