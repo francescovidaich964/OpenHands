@@ -44,6 +44,7 @@ import {
   newestReleaseTag,
   pushArgs,
   resolveSyncSettings,
+  SYNC_STATE_FILE,
   syncTaskText,
 } from "./lib/upstream-sync-logic.mjs";
 import { isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
@@ -66,7 +67,6 @@ const CHANNEL = {
   state: "sync:state",
 };
 
-const STATE_FILE = "upstream-sync.json";
 /** `git fetch` runs on an explicit Check, or when the last one is older. */
 const FETCH_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 5 * 60 * 1000;
@@ -101,7 +101,7 @@ export function registerUpstreamSync({
 }) {
   const archiveDir = getArchiveDir();
   const supported = process.platform === "win32";
-  const statePath = join(app.getPath("userData"), STATE_FILE);
+  const statePath = join(app.getPath("userData"), SYNC_STATE_FILE);
   /** True while a sync mutation is in flight (best-effort double-click guard). */
   let busy = false;
   /** True from the moment the sync asks for a build until it is really done. */

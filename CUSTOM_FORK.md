@@ -46,7 +46,7 @@ New files (fork-only, no upstream conflicts expected):
 
 - `scripts/write-build-info.mjs`: writes git-ignored `electron/build-info.json` (`repoPath`, `commitSha`, `branch`, `buildTime`); hooked into `build:desktop` right after `build:app`. Optional override: `%APPDATA%\<app userData>\self-update.json` with `{"repoPath": "..."}` if the clone moves.
 - `electron/self-update.mjs`: IPC handlers `status`, `build`, `cancel`, `install`, `listArchive` + `self-update:log` event. Sender must be the main window's main frame on a loopback URL. Build runs `npm run typecheck && npm run build:desktop` (the vite build does not check types). `install` only accepts a file named `Agent-Canvas-Setup-<version>-<sha>.exe` directly inside `%LOCALAPPDATA%\AgentCanvasBuilds`, and only in the packaged app.
-- `electron/lib/self-update-logic.mjs` (+ `.test.mjs`): pure, unit-tested rules: archive names, installer path validation, fresh-installer discovery, pruning (keep 5), log chunking, repo-path resolution, sender trust, last helper run from `install.log`.
+- `electron/lib/self-update-logic.mjs` (+ `.test.mjs`): pure, unit-tested rules: archive names, installer path validation, fresh-installer discovery, pruning (newest build + newest `main` build), log chunking, repo-path resolution, sender trust, last helper run from `install.log`.
 - `electron/lib/install-helper-script.mjs`: the PowerShell helper (waits for app exit, then for any process under the install dir, runs `/S` with a 10 min bound, logs to `install.log`, relaunches unless the app is already running, deletes itself) and the launcher that starts it. The app runs the launcher as a short-lived child; the launcher `Start-Process`es the helper (a grandchild escapes libuv's kill-on-close job; `spawn({detached:true})` of powershell.exe was measured to run nothing), checks it is still alive after 3 s and prints its PID. The app quits only after that; otherwise it stays open and shows the error.
 - `src/utils/self-update-bridge.ts`, `src/components/features/settings/custom-build-card.tsx` (+ test).
 
@@ -110,7 +110,7 @@ Installed app (per-user, silent `/S`):
 - A Cancel that lands exactly as the build finishes reports "cancelled" although the installer was archived (it still appears in the Reinstall list).
 - The failure block shows the last 50 raw log lines; long vite warning lines can bury the actual error.
 - A fresh profile shows the first-run onboarding screen, which hides all settings routes (upstream behaviour).
-- Not tested: an install that fails (non-zero exit), a locked install dir, keep-5 pruning (only 3 archives so far), Cancel close to the end of a build.
+- Not tested: an install that fails (non-zero exit), a locked install dir, Cancel close to the end of a build.
 
 ## Upstream sync from the app (design, branch `custom/upstream-sync`)
 
@@ -203,7 +203,7 @@ Unit tests for the logic module and the panel. End to end on the installed app w
 
 Locations:
 
-- Archive of installers: `%LOCALAPPDATA%\AgentCanvasBuilds\` (newest 5 kept)
+- Archive of installers: `%LOCALAPPDATA%\AgentCanvasBuilds\`. After each in-app build it keeps only the installer just built and the newest one built from the anchor branch (`syncBranch`, default `main`: the rollback point); while an upstream sync is unfinished it also keeps the previous `main` build. `archive-index.json` there records each installer's branch; installers without a record (built before the index) are pruned at the next build.
 - Install log: `%LOCALAPPDATA%\AgentCanvasBuilds\install.log`
 - Helper script (temporary, deletes itself when done): `%TEMP%\agent-canvas-install-<timestamp>.ps1`
 

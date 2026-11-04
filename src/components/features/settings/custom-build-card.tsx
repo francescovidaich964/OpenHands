@@ -377,7 +377,7 @@ function CustomBuildCardInner() {
             >
               {archive.map((e) => (
                 <option key={e.path} value={e.path}>
-                  {`${e.version ?? "?"} · ${short(e.sha) ?? "?"} · ${new Date(e.mtimeMs).toLocaleString()}`}
+                  {`${e.version ?? "?"} · ${short(e.sha) ?? "?"}${e.branch ? ` · ${e.branch}` : ""} · ${new Date(e.mtimeMs).toLocaleString()}`}
                   {isInstalledEntry(e, status.installedSha)
                     ? ` (${t(I18nKey.SELF_UPDATE$INSTALLED_TAG)})`
                     : ""}

@@ -7,6 +7,9 @@
  * here so it can be unit-tested.
  */
 
+/** `<userData>/<this>` holds the sync record; self-update.mjs reads it too. */
+export const SYNC_STATE_FILE = "upstream-sync.json";
+
 /** What `<userData>/self-update.json` may override; these are the defaults. */
 export const DEFAULT_SYNC_SETTINGS = {
   syncBranch: "main",

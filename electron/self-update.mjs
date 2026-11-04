@@ -35,7 +35,6 @@ import {
   INSTALL_HELPER_PS1,
 } from "./lib/install-helper-script.mjs";
 import {
-  ARCHIVE_KEEP,
   BUILD_LOG_MAX_LINES,
   archiveFileName,
   findNewestInstaller,
@@ -50,6 +49,10 @@ import {
   splitChunk,
   trimLog,
 } from "./lib/self-update-logic.mjs";
+import {
+  SYNC_STATE_FILE,
+  resolveSyncSettings,
+} from "./lib/upstream-sync-logic.mjs";
 import { isLoopbackAppUrl } from "./lib/window-url-policy.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -66,6 +69,8 @@ const CHANNEL = {
 
 const LOG_FLUSH_MS = 100;
 export const OVERRIDE_FILE = "self-update.json";
+/** Next to the installers: `{ "<installer name>": { branch, builtMs } }`. */
+const ARCHIVE_INDEX_FILE = "archive-index.json";
 // The vite build strips types without checking them, so a commit with a type
 // error would otherwise build and install fine. make-i18n first: it regenerates
 // src/i18n/declaration.ts from translation.json, which typecheck and build both
@@ -159,6 +164,12 @@ function listDir(dir) {
 export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
   const archiveDir = getArchiveDir();
   const supported = process.platform === "win32";
+  const readArchiveIndex = () => {
+    const index = readJson(join(archiveDir, ARCHIVE_INDEX_FILE));
+    return index && typeof index === "object" && !Array.isArray(index)
+      ? index
+      : {};
+  };
 
   /** @type {{running: boolean, child: import("node:child_process").ChildProcess | null, startedMs: number, lines: string[], cancelled: boolean, result: object | null}} */
   const build = {
@@ -314,18 +325,41 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
           await run("git", ["rev-parse", "--short", "HEAD"], repo)
         ).stdout.trim() || "0000000"; // placeholder still matches the archive-name pattern
       mkdirSync(archiveDir, { recursive: true });
-      const dest = join(archiveDir, archiveFileName(version, sha));
+      const name = archiveFileName(version, sha);
+      const dest = join(archiveDir, name);
       copyFileSync(join(outDir, installer.name), dest);
-      for (const name of selectArchiveToPrune(
-        listDir(archiveDir),
-        ARCHIVE_KEEP,
-      )) {
+      // Which branch each installer came from: pruning keeps the newest build
+      // of the anchor branch (the fork's main) as the rollback point.
+      const branch = (
+        await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], repo)
+      ).stdout.trim();
+      const index = readArchiveIndex();
+      index[name] = { branch: branch || null, builtMs: Date.now() };
+      const anchorBranch = resolveSyncSettings(
+        readJson(join(app.getPath("userData"), OVERRIDE_FILE)),
+      ).syncBranch;
+      // An unfinished upstream sync keeps the pre-sync anchor build too.
+      const syncInFlight = Boolean(
+        readJson(join(app.getPath("userData"), SYNC_STATE_FILE))?.sync,
+      );
+      for (const old of selectArchiveToPrune(listDir(archiveDir), {
+        keepName: name,
+        index,
+        anchorBranch,
+        anchorKeep: syncInFlight ? 2 : 1,
+      })) {
         try {
-          unlinkSync(join(archiveDir, name));
+          unlinkSync(join(archiveDir, old));
+          delete index[old];
         } catch {
           // best-effort: an installer that is in use stays until the next build
         }
       }
+      writeFileSync(
+        join(archiveDir, ARCHIVE_INDEX_FILE),
+        `${JSON.stringify(index, null, 2)}\n`,
+        "utf8",
+      );
       build.result = { ok: true, installerPath: dest, version, sha };
     } catch (err) {
       // e.g. the copy into the archive failed (disk full, file locked)
@@ -412,14 +446,17 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
   });
 
   // ── archive ─────────────────────────────────────────────────────────────────
-  const archiveEntries = () =>
-    sortArchive(listDir(archiveDir)).map((e) => ({
+  const archiveEntries = () => {
+    const index = readArchiveIndex();
+    return sortArchive(listDir(archiveDir)).map((e) => ({
       path: join(archiveDir, e.name),
       name: e.name,
       mtimeMs: e.mtimeMs,
       size: e.size,
+      branch: index[e.name]?.branch ?? null,
       ...parseArchiveFileName(e.name),
     }));
+  };
 
   handle(CHANNEL.listArchive, async () => ({
     ok: true,

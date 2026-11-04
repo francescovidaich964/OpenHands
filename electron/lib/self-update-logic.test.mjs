@@ -124,32 +124,54 @@ describe("archive pruning", () => {
     mtimeMs: t,
   });
 
-  it("keeps the newest N and returns the rest", () => {
-    const entries = [
-      mk(1, 1),
-      mk(2, 2),
-      mk(3, 3),
-      mk(4, 4),
-      mk(5, 5),
-      mk(6, 6),
-      mk(7, 7),
-    ];
-    expect(selectArchiveToPrune(entries, 5).sort()).toEqual(
-      [mk(1, 1).name, mk(2, 2).name].sort(),
-    );
+  const entries = [mk(1, 1), mk(2, 2), mk(3, 3), mk(4, 4), mk(5, 5)];
+  const index = {
+    [mk(1, 1).name]: { branch: "main" },
+    [mk(2, 2).name]: { branch: "main" },
+    [mk(3, 3).name]: { branch: "custom/feature" },
+    // mk(4) has no record: built before the index existed
+    [mk(5, 5).name]: { branch: "custom/other" },
+  };
+
+  it("keeps only the build just made and the newest main build", () => {
+    expect(
+      selectArchiveToPrune(entries, { keepName: mk(5, 5).name, index }).sort(),
+    ).toEqual([mk(1, 1).name, mk(3, 3).name, mk(4, 4).name].sort());
   });
 
-  it("prunes nothing at or below the limit", () => {
-    expect(selectArchiveToPrune([mk(1, 1), mk(2, 2)], 5)).toEqual([]);
+  it("keeps the pre-sync main build while a sync is unfinished", () => {
+    expect(
+      selectArchiveToPrune(entries, {
+        keepName: mk(5, 5).name,
+        index,
+        anchorKeep: 2,
+      }).sort(),
+    ).toEqual([mk(3, 3).name, mk(4, 4).name].sort());
+  });
+
+  it("follows the configured anchor branch", () => {
+    expect(
+      selectArchiveToPrune(entries, {
+        keepName: mk(5, 5).name,
+        index,
+        anchorBranch: "custom/feature",
+      }).sort(),
+    ).toEqual([mk(1, 1).name, mk(2, 2).name, mk(4, 4).name].sort());
+  });
+
+  it("keeps just the new build when no main build exists", () => {
+    expect(
+      selectArchiveToPrune([mk(4, 4), mk(5, 5)], { keepName: mk(5, 5).name }),
+    ).toEqual([mk(4, 4).name]);
   });
 
   it("never touches files that are not archive installers", () => {
-    const entries = [
+    const withOthers = [
       { name: "install.log", mtimeMs: 0 },
-      { name: "notes.txt", mtimeMs: 0 },
+      { name: "archive-index.json", mtimeMs: 0 },
       mk(1, 1),
     ];
-    expect(selectArchiveToPrune(entries, 0)).toEqual([mk(1, 1).name]);
+    expect(selectArchiveToPrune(withOthers, {})).toEqual([mk(1, 1).name]);
   });
 
   it("sortArchive is newest first", () => {

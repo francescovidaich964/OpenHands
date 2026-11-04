@@ -47,6 +47,8 @@ export interface SelfUpdateArchiveEntry {
   size: number;
   version?: string;
   sha?: string;
+  /** Branch it was built from (archive index); null for older installers. */
+  branch?: string | null;
 }
 
 /** Phases of the in-app upstream sync — see electron/upstream-sync.mjs. */
