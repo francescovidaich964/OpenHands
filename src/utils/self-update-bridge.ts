@@ -13,6 +13,15 @@ export interface SelfUpdateBuildResult {
   sha?: string;
 }
 
+/** How the installed build relates to the clone's HEAD (`ahead` = the build has
+ * commits HEAD does not, e.g. it was built from a feature branch). */
+export type InstalledRelation =
+  | "same"
+  | "behind"
+  | "ahead"
+  | "diverged"
+  | "unknown";
+
 export interface SelfUpdateStatus {
   ok: boolean;
   error: string | null;
@@ -28,9 +37,34 @@ export interface SelfUpdateStatus {
   headSha: string | null;
   /** null when it could not be determined */
   clean: boolean | null;
+  /** Commits in HEAD that the installed build lacks (max 20). */
   pendingCommits: string[];
+  /** Commits in the installed build that HEAD lacks (max 20). */
+  installedOnlyCommits: string[];
+  /** Why that list could not be read; informational, does not block Build. */
+  installedOnlyError: string | null;
+  /** Why installed-vs-HEAD could not be compared (an sha the clone lacks). */
+  installedRelationError: string | null;
+  installedRelation: InstalledRelation;
+  /** A git operation the clone is in the middle of ("rebase", "merge", …). */
+  gitOperation: string | null;
   /** Why pendingCommits could not be listed; informational, does not block Build. */
   pendingCommitsError: string | null;
+  /** e.g. "origin/main"; null when the branch has no tracking ref. */
+  upstream: string | null;
+  /** Commits on the tracking ref that HEAD lacks; null when unreadable. */
+  newOnRemote: number | null;
+  /** Local commits the tracking ref does not have. */
+  unpushed: number | null;
+  newOnRemoteCommits: string[];
+  unpushedCommits: string[];
+  remoteError: string | null;
+  /** Why Pull is refused, in words; null means it is a waiting fast-forward. */
+  pullError: string | null;
+  /** When the main process last fetched the tracking ref (0 h for never). */
+  lastFetchMs: number | null;
+  /** Why that fetch failed; null when it did not run or worked. */
+  fetchError: string | null;
   /** install.log lines of the most recent install attempt (empty if none). */
   lastInstall: string[];
   build: {
@@ -205,6 +239,10 @@ export interface SelfUpdateBridge {
   build: () => Promise<SelfUpdateBuildResult>;
   cancel: () => Promise<{ ok: boolean; error?: string }>;
   install: (installerPath: string) => Promise<{ ok: boolean; error?: string }>;
+  /** `git fetch` of the current branch's tracking ref only (main process owns it). */
+  fetch: () => Promise<{ ok: boolean; error?: string }>;
+  /** `git merge --ff-only @{upstream}`; refused unless it is a fast-forward. */
+  pull: () => Promise<{ ok: boolean; error?: string; output?: string }>;
   listArchive: () => Promise<{
     ok: boolean;
     archive?: SelfUpdateArchiveEntry[];
