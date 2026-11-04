@@ -27,6 +27,7 @@ import { useLatestAgentCanvasVersion } from "#/hooks/query/use-latest-agent-canv
 import DockerIcon from "#/icons/docker.svg?react";
 import NpmIcon from "#/icons/npm.svg?react";
 import { I18nKey } from "#/i18n/declaration";
+import { getSelfUpdateBridge } from "#/utils/self-update-bridge";
 import { cn } from "#/utils/utils";
 
 const COPY_FEEDBACK_MS = 2000;
@@ -252,6 +253,15 @@ function AgentCanvasUpdateModal({
               </span>
             )}
           </div>
+
+          {getSelfUpdateBridge() ? (
+            <span
+              data-testid="agent-canvas-update-replaces-custom-build"
+              className="text-xs text-muted"
+            >
+              {t(I18nKey.SELF_UPDATE$OFFICIAL_REPLACES)}
+            </span>
+          ) : null}
 
           {updateAvailable ? (
             <div className="flex w-full flex-col border-t border-border pt-3">
