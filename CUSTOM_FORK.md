@@ -112,6 +112,62 @@ Installed app (per-user, silent `/S`):
 - A fresh profile shows the first-run onboarding screen, which hides all settings routes (upstream behaviour).
 - Not tested: an install that fails (non-zero exit), a locked install dir, keep-5 pruning (only 3 archives so far), Cancel close to the end of a build.
 
+## Upstream sync from the app (design, branch `custom/upstream-sync`)
+
+Goal: the desktop app notices a newer upstream release, rebases the fork's `main` onto it, rebuilds and reinstalls itself, and (after the new build runs) pushes `main` to the fork. Conflicts are handed to an AI agent of the user's choice, or to the user as a copyable task.
+
+Model of the fork: `main` = an upstream release tag (or an upstream `main` snapshot) + a straight line of fork commits (features land as squash merges). A sync is `git rebase <newest upstream tag>` on `main`; upstream commits already in the tag are skipped by git, the fork commits are replayed.
+
+### Pieces
+
+| Piece | What |
+|---|---|
+| `scripts/write-build-info.mjs` | also records `upstreamTag` = `git describe --tags --abbrev=0 --match "v[0-9]*"` (the release the build sits on) |
+| `electron/upstream-sync.mjs` (new) | IPC `sync:check`, `sync:start`, `sync:agent`, `sync:abort`, `sync:discard`, `sync:push`, `sync:state`; state persisted in `<userData>/upstream-sync.json` so it survives the restart-to-install |
+| `electron/lib/upstream-sync-logic.mjs` (new, + tests) | pure rules: newest release tag (`^v\d+\.\d+\.\d+$`, semver order), backup branch names, conflict-task text, agent command lines, push preconditions, phase from repo facts |
+| `src/components/features/settings/upstream-sync-panel.tsx` (new, + tests) | the sync UI inside the Custom build card |
+| `agent-canvas-update-card.tsx` (upstream file) | in the desktop app the sidebar card shows the upstream-release check instead of npm; its modal links to Settings > Application. Diff kept to a wrapper |
+
+Settings (optional) in `<userData>/self-update.json` (already holds `repoPath`): `syncBranch` (default `main`), `upstreamRemote` (`upstream`), `forkRemote` (`origin`), `opencodeModel` (`ax_h200/selfhosted-model#xhigh`).
+
+### Check
+
+`git fetch <upstreamRemote> --tags --prune` (only on an explicit Check or at most every 6 h), then: `latestTag` = highest release tag; `updateAvailable` = `latestTag` is not an ancestor of the clone's `syncBranch`. Shown: installed build's `upstreamTag`, clone's base tag, `latestTag`, number of fork commits (`git rev-list --count <branch> --not --remotes=<upstreamRemote>`).
+
+### Sync & install
+
+Preconditions (refused with a message otherwise): Windows, packaged app, clone checked out on `syncBranch`, clean tree, no rebase in progress, no build running.
+
+1. `git fetch <upstreamRemote> --tags`; re-resolve `latestTag`.
+2. `git branch backup/<branch>-<yyyymmdd-HHMMss>` at HEAD (recorded in the state file).
+3. `git rebase <latestTag>` with `GIT_EDITOR=true`.
+4. Clean: phase `rebased`, then the normal Build runs automatically (typecheck + build:desktop) and offers Restart to install.
+5. Conflicts: phase `conflict`; the rebase stays in progress; the panel lists the conflicted files.
+
+### Conflicts
+
+The panel shows the generated task (repo, branch, target tag, backup branch, conflicted files, fork file list from this document, rules: keep the fork's behaviour, adapt it to upstream's changes, `git add` + `git rebase --continue` with `GIT_EDITOR=true` until done, then `npm run typecheck`, the self-update vitest files and `npm run check-translation-completeness`; commit fixes as new commits; never push, never reset or abort unless it cannot be resolved, then abort and explain).
+
+- **Agent** dropdown (only CLIs found on PATH are enabled): `opencode` (`opencode run --auto -m <opencodeModel> --title agent-canvas-rebase "<prompt>"`) or `Claude Code` (`claude -p "<prompt>" --permission-mode acceptEdits --allowedTools "Bash(git *)" "Bash(npm *)" "Bash(npx *)"`), started in the clone through the same detached launcher as the install helper, output to `%LOCALAPPDATA%\AgentCanvasBuilds\sync-agent-<ts>.log` (tailed in the panel). The prompt points to the task file written next to the log (no long command lines).
+- **Copy task**: the same text to the clipboard, for any agent the user runs by hand.
+- **Abort sync**: `git rebase --abort` (disabled while an agent runs).
+- The panel polls: when no rebase is in progress, the branch contains `latestTag` and the tree is clean, phase becomes `rebased` and Build is enabled; if the agent exits with the rebase still in progress, the panel says so and keeps Abort / Copy task available.
+
+### After the install
+
+Phase `installed` = the running build's `commitSha` == the branch HEAD and the branch contains `latestTag`. The panel then offers:
+
+- **Push to fork**: `git push --force-with-lease=<branch>:<origin sha recorded before the sync> <forkRemote> <branch>`; the backup branch is kept locally.
+- **Discard sync** (before pushing): `git reset --keep <backup>`; then Build + Restart to install returns to the old version (or Reinstall previous build from the archive, faster).
+
+### Not doing
+
+No automatic push; no sync onto upstream `main` (tags only); no interactive rebase; no sync while the clone is on another branch (feature branches are rebased by hand).
+
+### Validation plan
+
+Unit tests for the logic module and the panel. End to end on the installed app with a throwaway branch `test/sync-*` = `v1.34.0` + the fork commits (selected with `syncBranch`): clean sync to v1.35.0 → build → install → Push (to a throwaway remote branch only) → Discard on a second run; and a forced conflict handled once by each agent and once by Copy task.
+
 ## Upstream sync procedure (Phase 6)
 
 1. `git fetch upstream --tags`; pick the newest release tag (`gh release list --repo OpenHands/OpenHands --limit 5`).
