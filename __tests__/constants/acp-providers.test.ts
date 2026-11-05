@@ -4,11 +4,14 @@ import {
   ACP_CUSTOM_PRESET_KEY,
   ACP_PROVIDERS,
   ACP_VERTEX_SAFE_MODEL,
+  acpCommandOverride,
   buildAcpAgentSettingsDiff,
   getAcpCredentialConflicts,
   getAcpPreferredDefaultModel,
   getAcpProviderDisplayName,
+  getAcpProvider,
   getAcpProviderSecrets,
+  withoutDuplicateAcpDefault,
 } from "#/constants/acp-providers";
 
 describe("getAcpProviderDisplayName", () => {
@@ -253,5 +256,60 @@ describe("getAcpCredentialConflicts", () => {
       ),
     ).toEqual([]);
     expect(getAcpCredentialConflicts(null, () => true)).toEqual([]);
+  });
+});
+
+describe("acpCommandOverride", () => {
+  const CLAUDE_DEFAULT = getAcpProvider("claude-code")?.default_command;
+
+  it("is null for the command the registry already pins, keeping today's request and cache key", () => {
+    expect(CLAUDE_DEFAULT?.length).toBeGreaterThan(0);
+    expect(acpCommandOverride("claude-code", CLAUDE_DEFAULT)).toBeNull();
+  });
+
+  it("is the agent's own argv when it pins another build of the same CLI", () => {
+    const pinned = [
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.99.1",
+    ];
+    expect(acpCommandOverride("claude-code", pinned)).toEqual(pinned);
+  });
+
+  it("is the command for a custom server, which has no registry default to compare with", () => {
+    expect(acpCommandOverride("custom", ["my-acp", "--stdio"])).toEqual([
+      "my-acp",
+      "--stdio",
+    ]);
+  });
+
+  it("is null when there is no command to send", () => {
+    expect(acpCommandOverride("claude-code", null)).toBeNull();
+    expect(acpCommandOverride("claude-code", undefined)).toBeNull();
+    expect(acpCommandOverride("claude-code", [])).toBeNull();
+  });
+});
+
+describe("withoutDuplicateAcpDefault", () => {
+  const MODELS = [
+    { id: "default", label: "Default (recommended)" },
+    { id: "opus", label: "Opus" },
+  ];
+
+  it("drops the adapter's own default row while the picker offers an Agent default", () => {
+    expect(withoutDuplicateAcpDefault(MODELS, true, "opus")).toEqual([
+      { id: "opus", label: "Opus" },
+    ]);
+  });
+
+  it("keeps it where no Agent default row is offered", () => {
+    expect(withoutDuplicateAcpDefault(MODELS, false, "opus")).toEqual(MODELS);
+  });
+
+  it("keeps it when it is the saved model, so that choice stays labelled and selectable", () => {
+    expect(withoutDuplicateAcpDefault(MODELS, true, "default")).toEqual(MODELS);
+    expect(withoutDuplicateAcpDefault(MODELS, true, null)).toEqual([
+      { id: "opus", label: "Opus" },
+    ]);
   });
 });

@@ -12,6 +12,7 @@ import { useOptionalConversationId } from "#/hooks/use-conversation-id";
 import { useAcpModelDiscovery } from "#/hooks/query/use-acp-model-discovery";
 import { useAcpSessionModels } from "#/hooks/query/use-acp-session-models";
 import {
+  acpCommandOverride,
   getAcpPreferredDefaultModel,
   getAcpProvider,
   labelForAcpModel,
@@ -74,6 +75,11 @@ export function useChatInputModelState(): ChatInputModelState {
       (isActiveAcpConversation
         ? conversation?.launched_agent_profile?.secret_refs
         : activeAcpProfile?.secret_refs) ?? null,
+    // A conversation runs its profile's own command, which can pin a different
+    // build of the CLI than the registry default and report other models. Null
+    // for a default-command chat (same request and cache key as before) and on
+    // the home page, where the command to launch with is not chosen yet.
+    command: acpCommandOverride(acpServerKey, conversation?.acp_command),
   });
   // The session's own list arrives only after it starts.
   const sessionModels = useAcpSessionModels(

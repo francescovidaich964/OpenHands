@@ -1026,6 +1026,64 @@ describe("toAppConversation", () => {
     expect(result.llm_model).toBe("default");
   });
 
+  it("carries the argv the conversation's agent runs so the picker can ask it for models", () => {
+    // A profile can pin another build of the same CLI (a claude chat on
+    // claude-agent-acp@0.99.1 while the registry pins 0.63.0), and the two
+    // report different model lists. The payload's own argv is the only way the
+    // frontend can tell them apart; ``acp_args`` are appended to the command by
+    // the server when it spawns the CLI, so they ride along as one argv.
+    const result = toAppConversation({
+      ...baseInfo,
+      agent: {
+        kind: "ACPAgent",
+        acp_server: "claude-code",
+        acp_command: [
+          "npx",
+          "-y",
+          "@agentclientprotocol/claude-agent-acp@0.99.1",
+        ],
+        acp_args: ["--verbose"],
+        llm: { model: "acp-managed" },
+      },
+    });
+    expect(result.acp_command).toEqual([
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.99.1",
+      "--verbose",
+    ]);
+  });
+
+  it("leaves acp_command null when the payload carries no command", () => {
+    // An older agent-server, or a list response without ``agent``: model
+    // discovery stays on the provider's default command, as before.
+    expect(toAppConversation(baseInfo).acp_command).toBeNull();
+    expect(
+      toAppConversation({
+        ...baseInfo,
+        agent: {
+          kind: "ACPAgent",
+          acp_server: "opencode",
+          acp_command: [],
+          acp_args: null,
+        },
+      }).acp_command,
+    ).toBeNull();
+  });
+
+  it("does not carry an ACP command on an OpenHands conversation", () => {
+    const result = toAppConversation({
+      ...baseInfo,
+      agent: {
+        kind: "Agent",
+        acp_command: ["opencode", "acp"],
+        llm: { model: "gpt-5" },
+      },
+    });
+    expect(result.agent_kind).toBe("openhands");
+    expect(result.acp_command).toBeNull();
+  });
+
   it("surfaces acp_server from tags.acpserver for ACP conversations", () => {
     // The ``acpserver`` conversation tag is stamped at create time
     // (``buildStartConversationRequest``) but never previously plumbed

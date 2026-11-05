@@ -1,4 +1,8 @@
-import type { ACPModelOption } from "#/constants/acp-providers";
+import type { AppConversation } from "#/api/conversation-service/agent-server-conversation-service.types";
+import {
+  acpCommandOverride,
+  type ACPModelOption,
+} from "#/constants/acp-providers";
 
 const STORAGE_PREFIX = "openhands-acp-models";
 
@@ -47,6 +51,28 @@ export function acpModelScope(
     ? JSON.stringify([...new Set(secretRefs)].sort())
     : "*";
   return command?.length ? `${secrets} ${JSON.stringify(command)}` : secrets;
+}
+
+/**
+ * The scope a conversation's remembered list lives under: the credentials it
+ * launched with, plus the command it actually runs. Every surface that reads or
+ * writes that list (the chat picker, the sidebar chip) goes through here, so a chat
+ * pinned to its own build of a CLI is never labelled from — and never overwrites —
+ * the default build's list.
+ */
+export function acpConversationModelScope(
+  conversation:
+    | Pick<
+        AppConversation,
+        "launched_agent_profile" | "acp_server" | "acp_command"
+      >
+    | null
+    | undefined,
+): string {
+  return acpModelScope(
+    conversation?.launched_agent_profile?.secret_refs,
+    acpCommandOverride(conversation?.acp_server, conversation?.acp_command),
+  );
 }
 
 /** The stored JSON for {@link readRememberedAcpModels}, or null. */

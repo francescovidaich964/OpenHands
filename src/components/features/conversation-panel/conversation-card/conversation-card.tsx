@@ -70,6 +70,8 @@ interface ConversationCardProps {
   agentKind?: "openhands" | "acp" | null;
   acpServer?: string | null;
   acpModels?: readonly ACPModelOption[] | null;
+  /** Which remembered-model list the chip falls back to; see the footer prop. */
+  acpModelScope?: string | null;
   tags?: Record<string, string> | null;
   /** Gates the tag-chip row; wired to the panel's "Tags" metadata toggle. */
   showTags?: boolean;
@@ -116,6 +118,7 @@ export function ConversationCard({
   agentKind = null,
   acpServer = null,
   acpModels = null,
+  acpModelScope = null,
   tags = null,
   showTags = false,
   isArchived,
@@ -433,6 +436,7 @@ export function ConversationCard({
           agentKind={agentKind}
           acpServer={acpServer}
           acpModels={acpModels}
+          acpModelScope={acpModelScope}
           tags={tags}
           showTags={showTagChipRow}
           isArchived={effectiveArchived}

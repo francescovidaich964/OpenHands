@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getAcpProvider } from "#/constants/acp-providers";
 import {
+  acpConversationModelScope,
   acpModelScope,
   readRememberedAcpModels,
   rememberAcpModels,
@@ -128,5 +130,42 @@ describe("remembered ACP models", () => {
     });
 
     expect(readRememberedAcpModels("cloud-1", "claude-code", ALL)).toEqual([]);
+  });
+});
+
+describe("acpConversationModelScope", () => {
+  const profile = {
+    agent_profile_id: "53ac84b5-11da-4fae-b1a3-2134536969e5",
+    revision: 3,
+    secret_refs: ["ANTHROPIC_API_KEY"],
+  };
+
+  it("scopes the list to the command the conversation actually runs", () => {
+    const conversation = {
+      acp_server: "opencode",
+      acp_command: ["opencode", "acp"],
+      launched_agent_profile: profile,
+    };
+    expect(acpConversationModelScope(conversation)).toBe(
+      acpModelScope(profile.secret_refs, ["opencode", "acp"]),
+    );
+    // ...and not the scope the provider's default command reads.
+    expect(acpConversationModelScope(conversation)).not.toBe(
+      acpModelScope(profile.secret_refs),
+    );
+  });
+
+  it("keeps the pre-override scope for a default-command conversation", () => {
+    expect(
+      acpConversationModelScope({
+        acp_server: "claude-code",
+        acp_command: getAcpProvider("claude-code")?.default_command ?? null,
+        launched_agent_profile: profile,
+      }),
+    ).toBe(acpModelScope(profile.secret_refs));
+  });
+
+  it("falls back to the secrets-only scope without a conversation", () => {
+    expect(acpConversationModelScope(null)).toBe(acpModelScope(null));
   });
 });

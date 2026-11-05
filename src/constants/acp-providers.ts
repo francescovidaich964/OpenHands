@@ -436,6 +436,28 @@ export function getAcpProvider(
 }
 
 /**
+ * The command an agent profile / conversation runs when it is *not* the
+ * provider's published default command, or ``null`` for the default one.
+ *
+ * Model discovery asks the ACP server itself for its models, so the command is
+ * part of both the request and the cache/remembered-model key: two pins of the
+ * same provider report different model lists. Returning ``null`` for a
+ * default-command agent keeps the request and the key it already has. The
+ * comparison is the whole argv, because a pinned version or a local binary is
+ * exactly the difference the picker needs to notice. An unknown or ``"custom"``
+ * server has no registry default, so its command is always an override.
+ */
+export function acpCommandOverride(
+  key: string | null | undefined,
+  command: readonly string[] | null | undefined,
+): string[] | null {
+  if (!command?.length) return null;
+  const argv = [...command];
+  const defaultCommand = getAcpProvider(key)?.default_command;
+  return argv.join(" ") === defaultCommand?.join(" ") ? null : argv;
+}
+
+/**
  * Resolve an ACP provider registry key (the value stored under
  * ``tags.acpserver`` on a conversation) to a human display name for the
  * sidebar chip.
@@ -484,6 +506,30 @@ export function labelForAcpModel(
 ): string | null {
   if (!modelId) return null;
   return models.find(({ id }) => id === modelId)?.label ?? modelId;
+}
+
+/** The id an ACP adapter uses for its own "let me choose" model (Claude: "Default (recommended)"). */
+export const ACP_ADAPTER_DEFAULT_MODEL_ID = "default";
+
+/**
+ * The rows a model picker should list for ``models``.
+ *
+ * A picker that offers its own "Agent default" row (send no ``acp_model`` at all)
+ * already offers what the adapter's ``default`` entry means, so the second row is
+ * dropped — two rows for one choice read as two different choices. It stays when it
+ * is the saved model, which has to remain listed to be labelled and re-selected, and
+ * it stays entirely where no agent-default row is offered (a running conversation
+ * stores an explicit model, so ``default`` is a real choice there).
+ */
+export function withoutDuplicateAcpDefault(
+  models: readonly ACPModelOption[],
+  offersAgentDefault: boolean,
+  selectedModelId: string | null | undefined,
+): ACPModelOption[] {
+  if (!offersAgentDefault) return [...models];
+  return models.filter(
+    ({ id }) => id !== ACP_ADAPTER_DEFAULT_MODEL_ID || id === selectedModelId,
+  );
 }
 
 /** Picker options for the models an ACP server reported. */
