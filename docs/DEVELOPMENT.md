@@ -73,6 +73,7 @@ directory before starting the Agent Server and preserve an explicit override.
 | `PORT`                       | Ingress port                           | `8000`                         |
 | `OH_AGENT_SERVER_LOCAL_PATH` | Absolute `software-agent-sdk` checkout | unset                          |
 | `OH_AGENT_SERVER_GIT_REF`    | Git ref for agent-server               | unset (`config/defaults.json`) |
+| `OH_AGENT_SERVER_REPO`       | https:// git repo URL for that ref     | upstream `software-agent-sdk`  |
 | `OH_AGENT_SERVER_VERSION`    | PyPI version for agent-server          | unset (`config/defaults.json`) |
 | `OH_AUTOMATION_LOCAL_PATH`   | Absolute `automation` checkout         | unset                          |
 | `OH_AUTOMATION_GIT_REF`      | Git ref for automation backend         | unset (`config/defaults.json`) |
@@ -155,13 +156,15 @@ automation. Leaving an override unset means "use the pin above", not Git
 2. `OH_AGENT_SERVER_GIT_REF` — branch, tag, or commit. All four workspace
    packages are installed from that same ref so inter-package APIs stay in
    sync. The launcher passes `uvx --reinstall` so a cached PyPI wheel with
-   the same version string is not reused.
+   the same version string is not reused. `OH_AGENT_SERVER_REPO` only applies when a
+   git ref is selected; it must be an `https://` URL and defaults to the upstream
+   repo.
 3. `OH_AGENT_SERVER_VERSION` — a specific PyPI version of those four packages.
 4. Default: `versions.agentServer` from `config/defaults.json`.
 
 ```sh
 OH_AGENT_SERVER_LOCAL_PATH=/abs/path/to/software-agent-sdk npm run dev
-OH_AGENT_SERVER_GIT_REF=<branch-or-sha> npm run dev
+OH_AGENT_SERVER_REPO=https://github.com/MyOrg/software-agent-sdk OH_AGENT_SERVER_GIT_REF=<branch-or-sha> npm run dev
 OH_AGENT_SERVER_VERSION=<versions.agentServer> npm run dev
 ```
 

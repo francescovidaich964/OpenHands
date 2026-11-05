@@ -35,6 +35,9 @@
  *     openhands-tools and openhands-workspace as editable so source edits are
  *     picked up without manual reinstall.
  *   - OH_AGENT_SERVER_GIT_REF: Git ref for agent-server
+ *   - OH_AGENT_SERVER_REPO: https:// git repo URL the agent-server ref comes
+ *     from (default: the upstream software-agent-sdk). Needs a git ref, like
+ *     OH_AUTOMATION_REPO does for the automation backend.
  * Secrets:
  *   The session API key is automatically seeded into agent-server secrets
  *   as OPENHANDS_AUTOMATION_API_KEY, making it available to agents in conversations.
@@ -296,6 +299,7 @@ ENVIRONMENT VARIABLES:
   OH_AUTOMATION_LOCAL_PATH    Absolute path to a local automation checkout (overridden only by --automation-git-ref)
   OH_AGENT_SERVER_LOCAL_PATH  Absolute path to a local software-agent-sdk checkout (highest precedence)
   OH_AGENT_SERVER_GIT_REF     Git ref for agent-server SDK (overrides default version)
+  OH_AGENT_SERVER_REPO        https:// git repo URL that ref is read from (default: upstream software-agent-sdk)
   OH_AGENT_SERVER_VERSION     Specific PyPI version for agent-server
   OH_SECRET_KEY               Secret key for sessions
   LOG_LEVEL                   Log level for both backends (default: WARNING)
