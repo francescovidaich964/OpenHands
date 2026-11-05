@@ -729,6 +729,49 @@ describe("buildAgentServerCommand", () => {
     expect(cmd.args).not.toContain("openhands-agent-server==1.18.0");
   });
 
+  it("reads the git ref from a fork when OH_AGENT_SERVER_REPO is set", () => {
+    const cmd = buildAgentServerCommand({
+      OH_AGENT_SERVER_REPO: "https://github.com/MyOrg/software-agent-sdk",
+      OH_AGENT_SERVER_GIT_REF: "fix/windows-acp-spawn",
+    });
+
+    expect(cmd.command).toBe("uvx");
+    expect(cmd.args).toContain(
+      "git+https://github.com/MyOrg/software-agent-sdk@fix/windows-acp-spawn#subdirectory=openhands-agent-server",
+    );
+    expect(cmd.args).toContain(
+      "git+https://github.com/MyOrg/software-agent-sdk@fix/windows-acp-spawn#subdirectory=openhands-sdk",
+    );
+    expect(cmd.args).toContain(
+      "git+https://github.com/MyOrg/software-agent-sdk@fix/windows-acp-spawn#subdirectory=openhands-workspace",
+    );
+  });
+
+  it("keeps the upstream repo when OH_AGENT_SERVER_REPO is unset", () => {
+    const cmd = buildAgentServerCommand({ OH_AGENT_SERVER_GIT_REF: "main" });
+
+    expect(cmd.args).toContain(
+      "git+https://github.com/OpenHands/software-agent-sdk@main#subdirectory=openhands-agent-server",
+    );
+  });
+
+  it("ignores OH_AGENT_SERVER_REPO when no git ref is selected", () => {
+    const cmd = buildAgentServerCommand({
+      OH_AGENT_SERVER_REPO: "https://github.com/MyOrg/software-agent-sdk",
+    });
+
+    expect(cmd.source).toBe("PyPI (1.59.0, default)");
+  });
+
+  it("rejects a non-https OH_AGENT_SERVER_REPO", () => {
+    expect(() =>
+      buildAgentServerCommand({
+        OH_AGENT_SERVER_REPO: "git+ssh://git@github.com/MyOrg/software-agent-sdk",
+        OH_AGENT_SERVER_GIT_REF: "main",
+      }),
+    ).toThrow(/https:\/\/ git URL/);
+  });
+
   it("uses local path with editable workspace packages when OH_AGENT_SERVER_LOCAL_PATH is set", () => {
     const sdk = "/abs/path/to/software-agent-sdk";
     const cmd = buildAgentServerCommand({ OH_AGENT_SERVER_LOCAL_PATH: sdk });

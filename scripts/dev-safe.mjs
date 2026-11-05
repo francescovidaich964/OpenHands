@@ -489,6 +489,9 @@ export function buildUvxPythonArgs(env = process.env) {
  *   edits are picked up without a manual reinstall. The agent-server itself
  *   is rebuilt from local source on each invocation (--reinstall).
  * - OH_AGENT_SERVER_GIT_REF: Git commit SHA or branch name
+ * - OH_AGENT_SERVER_REPO: Git repo URL the ref is read from (default:
+ *   AGENT_SERVER_GIT_REPO). Only used together with a git ref, and it must be an
+ *   https:// URL. Mirrors OH_AUTOMATION_REPO for the automation backend.
  * - OH_AGENT_SERVER_VERSION: Specific PyPI version (e.g., "1.59.0")
  *
  * If none are set, defaults to the released version specified by
@@ -505,6 +508,16 @@ export function buildAgentServerCommand(env = process.env) {
   const localPath = env.OH_AGENT_SERVER_LOCAL_PATH;
   const gitRef = env.OH_AGENT_SERVER_GIT_REF;
   const version = env.OH_AGENT_SERVER_VERSION;
+  const repoOverride = env.OH_AGENT_SERVER_REPO;
+  // Same rule the packaged default already satisfies: uvx is handed
+  // `git+<url>@<ref>`, so a non-https URL here would make the dev stack pull
+  // code over ssh/ssh-agent or from a local path nobody audited.
+  if (repoOverride && !repoOverride.startsWith("https://")) {
+    throw new Error(
+      `OH_AGENT_SERVER_REPO must be an https:// git URL, got: ${repoOverride}`,
+    );
+  }
+  const repoUrl = repoOverride || AGENT_SERVER_GIT_REPO;
 
   const uvxArgs = buildUvxPythonArgs(env);
   let source = "";
@@ -540,7 +553,7 @@ export function buildAgentServerCommand(env = process.env) {
     // string as the current PyPI release (e.g. both "1.26.0"). Without it, uv
     // silently reuses the cached PyPI wheels and the git ref is never actually
     // used, even though it was explicitly requested.
-    const baseGitUrl = `git+${AGENT_SERVER_GIT_REPO}@${gitRef}`;
+    const baseGitUrl = `git+${repoUrl}@${gitRef}`;
     uvxArgs.push(
       "--reinstall",
       "--from",

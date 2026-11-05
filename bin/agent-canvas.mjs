@@ -47,7 +47,7 @@ Default ports:
   automation:      ${defaults.ports.automation}
 
 Override versions via environment variables:
-  OH_AGENT_SERVER_VERSION, OH_AGENT_SERVER_GIT_REF, OH_AGENT_SERVER_LOCAL_PATH
+  OH_AGENT_SERVER_VERSION, OH_AGENT_SERVER_GIT_REF, OH_AGENT_SERVER_LOCAL_PATH, OH_AGENT_SERVER_REPO
   OH_AUTOMATION_VERSION, OH_AUTOMATION_GIT_REF`);
   process.exit(0);
 }
@@ -93,6 +93,7 @@ ENVIRONMENT VARIABLES:
   OH_BIND_HOST                 Bind address for ingress/static (default: 127.0.0.1)
   OH_SECRET_KEY                Secret key for encrypting settings
   OH_AGENT_SERVER_GIT_REF      Git ref for agent-server
+  OH_AGENT_SERVER_REPO         https:// git repo URL that ref is read from
   OH_AGENT_SERVER_LOCAL_PATH   Path to local SDK checkout (for development)
   OH_AGENT_SERVER_VERSION      Specific PyPI version for agent-server
   UV_PYTHON                    Python version/range for uvx-run services
