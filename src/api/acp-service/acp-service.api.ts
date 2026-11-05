@@ -120,14 +120,24 @@ class AcpService {
   /**
    * Ask the (local) agent-server which models ``server`` offers and which one
    * it picks by default, given the saved secrets named in ``secretNames``.
+   *
+   * ``command`` is the profile's own command override, asked instead of the
+   * provider default: an adapter pinned to a version reports that version's
+   * models, so asking the default would list models the profile cannot run.
    */
   static async discoverModels(
     server: string,
     secretNames: readonly string[],
+    command: readonly string[] | null = null,
   ): Promise<ACPModelDiscovery> {
     const { host, apiKey } = getAgentServerClientOptions();
     return new ACPClient({ host, apiKey }).discoverModels({
-      agent_settings: { agent_kind: "acp", acp_server: server },
+      agent_settings: {
+        agent_kind: "acp",
+        acp_server: server,
+        // Omitted for a default command, so that request stays exactly what it was.
+        ...(command?.length ? { acp_command: [...command] } : {}),
+      },
       secrets: buildCustomSecrets(secretNames.map((name) => ({ name }))),
     });
   }

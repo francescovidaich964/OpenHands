@@ -131,6 +131,14 @@ const CLAUDE_PROFILE = {
   acp_model: "",
 };
 
+// A command the profile pins for itself. A different adapter version reports a
+// different list, so discovery has to ask that command and not the default.
+const PINNED_CLAUDE_COMMAND = [
+  "npx",
+  "-y",
+  "@agentclientprotocol/claude-agent-acp@0.99.1",
+];
+
 describe("AgentSettingsScreen", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -445,6 +453,7 @@ describe("AgentSettingsScreen", () => {
     await screen.findByTestId("agent-command-input");
     expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith("claude-code", {
       secretRefs: null,
+      command: null,
     });
 
     await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
@@ -531,10 +540,50 @@ describe("AgentSettingsScreen", () => {
     await screen.findByTestId("agent-command-input");
     expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith("claude-code", {
       secretRefs: ["ANTHROPIC_API_KEY"],
+      command: null,
     });
   });
 
-  it("does not ask a custom command for its models", async () => {
+  it("asks a saved command override for its own models", async () => {
+    renderAgentSettingsScreen({
+      agentSettingsOverride: {
+        ...CLAUDE_PROFILE,
+        acp_command: PINNED_CLAUDE_COMMAND,
+      },
+    });
+
+    await screen.findByTestId("agent-command-input");
+    expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith("claude-code", {
+      secretRefs: null,
+      command: PINNED_CLAUDE_COMMAND,
+    });
+  });
+
+  it("asks the saved command, not the one being typed", async () => {
+    const user = userEvent.setup();
+    renderAgentSettingsScreen({
+      agentSettingsOverride: {
+        ...CLAUDE_PROFILE,
+        acp_command: PINNED_CLAUDE_COMMAND,
+      },
+    });
+    const commandInput = await screen.findByTestId("agent-command-input");
+    acpModelDiscoveryMock.mockClear();
+
+    await user.type(commandInput, " --extra");
+
+    // Discovery spawns the agent, so an edit asks nothing until it is saved.
+    expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith("claude-code", {
+      secretRefs: null,
+      command: PINNED_CLAUDE_COMMAND,
+    });
+    const asked = acpModelDiscoveryMock.mock.calls.map(([, options]) =>
+      JSON.stringify(options),
+    );
+    expect(asked.some((options) => options.includes("--extra"))).toBe(false);
+  });
+
+  it("asks a custom command for its own models", async () => {
     renderAgentSettingsScreen({
       agentSettingsOverride: {
         ...CLAUDE_PROFILE,
@@ -544,8 +593,9 @@ describe("AgentSettingsScreen", () => {
     });
 
     await screen.findByTestId("agent-command-input");
-    expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith(null, {
+    expect(acpModelDiscoveryMock).toHaveBeenLastCalledWith("custom", {
       secretRefs: null,
+      command: ["my-acp-wrapper"],
     });
   });
 

@@ -198,4 +198,41 @@ describe("AcpService.discoverModels", () => {
       },
     });
   });
+
+  it("sends the command the profile pins for itself", async () => {
+    discoverModels.mockResolvedValue({ current_model_id: "default" });
+    const command = [
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.99.1",
+    ];
+
+    await AcpService.discoverModels(
+      "claude-code",
+      ["ANTHROPIC_API_KEY"],
+      command,
+    );
+
+    expect(discoverModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent_settings: {
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          acp_command: command,
+        },
+      }),
+    );
+  });
+
+  it("asks the provider default for an empty command", async () => {
+    discoverModels.mockResolvedValue({ current_model_id: "default" });
+
+    await AcpService.discoverModels("claude-code", ["ANTHROPIC_API_KEY"], []);
+
+    expect(discoverModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent_settings: { agent_kind: "acp", acp_server: "claude-code" },
+      }),
+    );
+  });
 });

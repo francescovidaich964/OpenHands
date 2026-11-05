@@ -65,6 +65,30 @@ describe("remembered ACP models", () => {
     expect(acpModelScope([])).not.toBe(acpModelScope(null));
   });
 
+  it("names a scope by the command it was asked on", () => {
+    expect(acpModelScope(null, ["uvx", "pi-acp==0.9.0"])).not.toBe(ALL);
+    expect(acpModelScope(["B"], ["a"])).not.toBe(acpModelScope(["B"], ["b"]));
+    expect(acpModelScope(["B"], ["a"])).toBe(acpModelScope(["B"], ["a"]));
+    // Asking the provider default keeps the scope lists were stored under
+    // before commands could be overridden.
+    expect(acpModelScope(["B"], null)).toBe(acpModelScope(["B"]));
+    expect(acpModelScope(["B"], [])).toBe(acpModelScope(["B"]));
+  });
+
+  it("keeps a list per command", () => {
+    const pinned = acpModelScope(null, ["uvx", "pi-acp==0.9.0"]);
+    const haiku = [{ id: "haiku", label: "Haiku" }];
+    rememberAcpModels("cloud-1", "claude-code", ALL, MODELS);
+    rememberAcpModels("cloud-1", "claude-code", pinned, haiku);
+
+    expect(readRememberedAcpModels("cloud-1", "claude-code", ALL)).toEqual(
+      MODELS,
+    );
+    expect(readRememberedAcpModels("cloud-1", "claude-code", pinned)).toEqual(
+      haiku,
+    );
+  });
+
   it("offers every scope's models when no scope is given", () => {
     rememberAcpModels("cloud-1", "claude-code", ALL, MODELS);
     rememberAcpModels("cloud-1", "claude-code", acpModelScope([]), [

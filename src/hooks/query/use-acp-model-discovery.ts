@@ -18,9 +18,10 @@ import {
 async function discover(
   providerKey: string,
   secretNames: string[],
+  command: string[] | null,
 ): Promise<ACPModelDiscovery | null> {
   try {
-    return await AcpService.discoverModels(providerKey, secretNames);
+    return await AcpService.discoverModels(providerKey, secretNames, command);
   } catch {
     // Older agent-servers lack the endpoint.
     return null;
@@ -36,14 +37,20 @@ export type AcpModelSource = "live" | "remembered" | "none";
  * credentials. Only local backends can ask before a conversation starts;
  * otherwise ``models`` is the list the agent last reported with the same
  * secrets. ``secretRefs`` limits the lookup to the secrets a launch would
- * receive; null means every saved secret.
+ * receive; null means every saved secret. ``command`` is the profile's own
+ * command override; null asks the provider's default command.
  */
 export function useAcpModelDiscovery(
   providerKey: string | null | undefined,
   {
     enabled = true,
     secretRefs = null,
-  }: { enabled?: boolean; secretRefs?: readonly string[] | null } = {},
+    command = null,
+  }: {
+    enabled?: boolean;
+    secretRefs?: readonly string[] | null;
+    command?: readonly string[] | null;
+  } = {},
 ) {
   const { backend } = useActiveBackend();
   const isLocal = backend.kind === "local";
@@ -52,6 +59,7 @@ export function useAcpModelDiscovery(
     .map(({ name }) => name)
     .filter((name) => !secretRefs || secretRefs.includes(name))
     .sort();
+  const commandOverride = command?.length ? [...command] : null;
   const queryEnabled =
     enabled && isLocal && !!providerKey && !secrets.isLoading;
 
@@ -61,8 +69,12 @@ export function useAcpModelDiscovery(
       backend.id,
       providerKey,
       secretNames,
+      // Added only for an override, so a default-command lookup keeps the key
+      // (and the cached result) it has always had.
+      ...(commandOverride ? [commandOverride] : []),
     ],
-    queryFn: () => discover(providerKey as string, secretNames),
+    queryFn: () =>
+      discover(providerKey as string, secretNames, commandOverride),
     enabled: queryEnabled,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 15,
@@ -70,7 +82,7 @@ export function useAcpModelDiscovery(
     refetchOnWindowFocus: false,
   });
 
-  const scope = acpModelScope(secretRefs);
+  const scope = acpModelScope(secretRefs, commandOverride);
   const discovery = queryEnabled ? (query.data ?? null) : null;
   const liveModels = useMemo(
     () => toAcpModelOptions(discovery?.available_models),

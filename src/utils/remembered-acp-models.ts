@@ -33,11 +33,20 @@ function parseLists(raw: string | null): RememberedLists {
   }
 }
 
-/** The scope a list is remembered under: the secrets the agent could use. */
+/**
+ * The scope a list is remembered under: the secrets the agent could use, plus
+ * the command override it was asked on — a list an adapter reported for one
+ * command is not that agent's list for another. Empty for the provider's
+ * default command, so existing lists keep the scope they were stored under.
+ */
 export function acpModelScope(
   secretRefs: readonly string[] | null | undefined,
+  command?: readonly string[] | null,
 ): string {
-  return secretRefs ? JSON.stringify([...new Set(secretRefs)].sort()) : "*";
+  const secrets = secretRefs
+    ? JSON.stringify([...new Set(secretRefs)].sort())
+    : "*";
+  return command?.length ? `${secrets} ${JSON.stringify(command)}` : secrets;
 }
 
 /** The stored JSON for {@link readRememberedAcpModels}, or null. */
