@@ -43,6 +43,7 @@ import {
   isArchivedInstallerPath,
   isTrustedSender,
   lastInstallRun,
+  needsDependencyInstall,
   parseArchiveFileName,
   parseLeftRight,
   parseLogLines,
@@ -92,8 +93,23 @@ const ARCHIVE_INDEX_FILE = "archive-index.json";
 // need when a rebase brought new keys in. A function, not a constant: the sync
 // module reads it for the task file, and a constant here would mean a second
 // copy of the command that silently goes stale.
-export function buildCommand() {
-  return "npm run make-i18n && npm run typecheck && npm run build:desktop";
+export function buildCommand({ installDependencies = false } = {}) {
+  const build =
+    "npm run make-i18n && npm run typecheck && npm run build:desktop";
+  // A rebase or pull that changed package-lock.json would otherwise build
+  // the new code against the old node_modules.
+  return installDependencies
+    ? `npm ci --no-audit --no-fund && ${build}`
+    : build;
+}
+
+/** mtime of a file, or null when it does not exist. */
+function mtimeOf(path) {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 const HELPER_LAUNCH_TIMEOUT_MS = 30_000;
 
@@ -686,7 +702,14 @@ export function registerSelfUpdate({ app, ipcMain, getMainWindow }) {
     build.result = null;
     build.startedMs = Date.now();
     const startedMs = build.startedMs;
-    const command = buildCommand();
+    const command = buildCommand({
+      installDependencies: needsDependencyInstall({
+        lockMtimeMs: mtimeOf(join(repo, "package-lock.json")),
+        installedLockMtimeMs: mtimeOf(
+          join(repo, "node_modules", ".package-lock.json"),
+        ),
+      }),
+    });
     pushLines([`> ${command}  (${repo})`]);
 
     return new Promise((resolvePromise) => {
