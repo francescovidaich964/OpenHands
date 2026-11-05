@@ -55,6 +55,10 @@ const PI_DISCOVERY = {
 
 const ALL = acpModelScope(null);
 
+// A command the profile pins for itself: a different build reports a different
+// model list, so its lookup and its remembered list must stay its own.
+const PINNED_COMMAND = ["uvx", "pi-acp==0.9.0"];
+
 const AUTH_REQUIRED = {
   ...PI_DISCOVERY,
   current_model_id: null,
@@ -82,10 +86,11 @@ describe("useAcpModelDiscovery", () => {
     await waitFor(() =>
       expect(result.current.defaultModelId).toBe("anthropic/claude-opus-4-8"),
     );
-    expect(discoverModels).toHaveBeenCalledWith("pi", [
-      "ANTHROPIC_API_KEY",
-      "PI_AUTH_JSON",
-    ]);
+    expect(discoverModels).toHaveBeenCalledWith(
+      "pi",
+      ["ANTHROPIC_API_KEY", "PI_AUTH_JSON"],
+      null,
+    );
     const models = [
       { id: "anthropic/claude-opus-4-8", label: "Claude Opus 4.8" },
       { id: "anthropic/claude-sonnet-5", label: "anthropic/claude-sonnet-5" },
@@ -105,7 +110,7 @@ describe("useAcpModelDiscovery", () => {
     );
 
     await waitFor(() =>
-      expect(discoverModels).toHaveBeenCalledWith("pi", ["PI_AUTH_JSON"]),
+      expect(discoverModels).toHaveBeenCalledWith("pi", ["PI_AUTH_JSON"], null),
     );
   });
 
@@ -116,7 +121,9 @@ describe("useAcpModelDiscovery", () => {
       wrapper,
     });
 
-    await waitFor(() => expect(discoverModels).toHaveBeenCalledWith("pi", []));
+    await waitFor(() =>
+      expect(discoverModels).toHaveBeenCalledWith("pi", [], null),
+    );
   });
 
   it("does not offer a list remembered with other secrets", async () => {
@@ -257,5 +264,91 @@ describe("useAcpModelDiscovery", () => {
     renderHook(() => useAcpModelDiscovery(null), { wrapper });
 
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("asks the command the profile pins for itself", async () => {
+    discoverModels.mockResolvedValue(PI_DISCOVERY);
+
+    renderHook(() => useAcpModelDiscovery("pi", { command: PINNED_COMMAND }), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(discoverModels).toHaveBeenCalledWith(
+        "pi",
+        ["ANTHROPIC_API_KEY", "PI_AUTH_JSON"],
+        PINNED_COMMAND,
+      ),
+    );
+  });
+
+  it("looks a command up once, and a different command on its own", async () => {
+    discoverModels.mockResolvedValue(PI_DISCOVERY);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const sharedCache = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const pinned = renderHook(
+      () => useAcpModelDiscovery("pi", { command: [...PINNED_COMMAND] }),
+      { wrapper: sharedCache },
+    );
+    await waitFor(() => expect(pinned.result.current.source).toBe("live"));
+
+    // The same command again is the same agent, so its result is reused even
+    // though the caller passed a new array.
+    renderHook(() => useAcpModelDiscovery("pi", { command: PINNED_COMMAND }), {
+      wrapper: sharedCache,
+    });
+    // Another command is another agent's model list.
+    renderHook(() => useAcpModelDiscovery("pi", { command: ["pi"] }), {
+      wrapper: sharedCache,
+    });
+
+    await waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(2));
+    expect(discoverModels.mock.calls.map(([, , command]) => command)).toEqual([
+      PINNED_COMMAND,
+      ["pi"],
+    ]);
+  });
+
+  it("does not offer a list remembered for another command", async () => {
+    rememberAcpModels("local-1", "pi", ALL, [
+      { id: "anthropic/claude-sonnet-5", label: "Sonnet 5" },
+    ]);
+    discoverModels.mockResolvedValue(AUTH_REQUIRED);
+
+    const { result } = renderHook(
+      () => useAcpModelDiscovery("pi", { command: PINNED_COMMAND }),
+      { wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.discovery?.error?.code).toBe("ACPAuthRequired"),
+    );
+    expect(result.current.models).toEqual([]);
+    expect(result.current.source).toBe("none");
+  });
+
+  it("remembers a list under the command that reported it", async () => {
+    discoverModels.mockResolvedValue(PI_DISCOVERY);
+
+    const { result } = renderHook(
+      () => useAcpModelDiscovery("pi", { command: PINNED_COMMAND }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.source).toBe("live"));
+
+    expect(
+      readRememberedAcpModels(
+        "local-1",
+        "pi",
+        acpModelScope(null, PINNED_COMMAND),
+      ),
+    ).toEqual(result.current.models);
+    // The default command keeps its own scope, empty until it is asked.
+    expect(readRememberedAcpModels("local-1", "pi", ALL)).toEqual([]);
   });
 });

@@ -97,6 +97,8 @@ type AgentType = "openhands" | "acp";
 
 type AgentSettingsSnapshot = {
   agentType: AgentType;
+  /** The stored ``acp_server`` (a provider key or ``custom``), or null. */
+  acpServer: string | null;
   commandText: string;
   acpModel: string;
   isCustomAcpModel: boolean;
@@ -118,6 +120,7 @@ const ACP_CUSTOM_MODEL_KEY = "__custom_model__";
 const ACP_AGENT_DEFAULT_MODEL_KEY = "__agent_default_model__";
 const EMPTY_AGENT_SETTINGS_SNAPSHOT: AgentSettingsSnapshot = {
   agentType: "openhands",
+  acpServer: null,
   commandText: "",
   acpModel: "",
   isCustomAcpModel: false,
@@ -728,6 +731,7 @@ export function AgentSettingsScreen({
       setIsCustomAcpModel(nextIsCustomAcpModel);
       setLoadedSnapshot({
         agentType: "acp",
+        acpServer: acpServer ?? null,
         commandText: renderedCommandText,
         acpModel: nextAcpModel,
         isCustomAcpModel: nextIsCustomAcpModel,
@@ -1012,13 +1016,38 @@ export function AgentSettingsScreen({
   const isDefaultProviderCommand =
     !!selectedProvider &&
     commandTokens.join(" ") === selectedProvider.default_command.join(" ");
+  // Asking costs a subprocess, so discovery never chases the text being typed: it
+  // asks the live text while that is a provider default (picking a preset is a
+  // click) and otherwise the server and command as loaded. Saving a command closes
+  // the editor, so the next time it opens the saved command is the loaded one.
+  const discoveryServer = isDefaultProviderCommand
+    ? selectedPreset
+    : loadedSnapshot.acpServer;
+  const discoveryTokens = isDefaultProviderCommand
+    ? commandTokens
+    : parseCommand(loadedSnapshot.commandText);
+  const discoveryProvider = getAcpProvider(discoveryServer);
+  // Null means the provider's default command, which is the exact request — and
+  // the exact cache key — the editor made before it honoured command overrides.
+  const discoveryCommand =
+    discoveryTokens.length > 0 &&
+    discoveryTokens.join(" ") !== discoveryProvider?.default_command.join(" ")
+      ? discoveryTokens
+      : null;
   const liveModels = useAcpModelDiscovery(
-    isAcp && isDefaultProviderCommand ? selectedPreset : null,
+    // An override is asked of the server the profile names, even ``custom``: that
+    // preset has no registry entry because it exists to carry a command.
+    isAcp
+      ? discoveryCommand
+        ? discoveryServer
+        : (discoveryProvider?.key ?? null)
+      : null,
     {
       secretRefs:
         secretRefsSupportedOnProfile && secretsMode === "custom"
           ? selectedSecrets
           : null,
+      command: discoveryCommand,
     },
   );
 
