@@ -48,6 +48,22 @@ export function isArchivedInstallerPath(installerPath, archiveDir) {
 }
 
 /**
+ * Whether a build must run `npm ci` first: npm records each install in
+ * `node_modules/.package-lock.json`, so a `package-lock.json` newer than that
+ * record (a rebase or pull changed the dependencies), or no record at all,
+ * means node_modules does not match the lockfile. A checkout that leaves the
+ * lockfile untouched keeps its mtime, so ordinary builds skip the install.
+ *
+ * @param {{lockMtimeMs: number|null, installedLockMtimeMs: number|null}} mtimes
+ */
+export function needsDependencyInstall({ lockMtimeMs, installedLockMtimeMs }) {
+  if (lockMtimeMs === null || lockMtimeMs === undefined) return false;
+  if (installedLockMtimeMs === null || installedLockMtimeMs === undefined)
+    return true;
+  return lockMtimeMs > installedLockMtimeMs;
+}
+
+/**
  * The lines of the most recent helper run in install.log (from its last
  * "helper started" line), at most `max` lines; [] when there is none.
  */

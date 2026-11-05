@@ -7,6 +7,7 @@ import {
   isArchivedInstallerPath,
   isTrustedSender,
   lastInstallRun,
+  needsDependencyInstall,
   parseArchiveFileName,
   parseLeftRight,
   parseLogLines,
@@ -385,5 +386,31 @@ describe("pullRefusal", () => {
     expect(pullRefusal({ ...ok, clean: false, buildRunning: true })).toBe(
       pullRefusal({ ...ok, clean: false }),
     );
+  });
+});
+
+describe("needsDependencyInstall", () => {
+  it("installs when the lockfile changed after the last install", () => {
+    expect(
+      needsDependencyInstall({ lockMtimeMs: 200, installedLockMtimeMs: 100 }),
+    ).toBe(true);
+  });
+
+  it("skips the install when node_modules is newer than the lockfile", () => {
+    expect(
+      needsDependencyInstall({ lockMtimeMs: 100, installedLockMtimeMs: 200 }),
+    ).toBe(false);
+  });
+
+  it("installs when node_modules has no install record", () => {
+    expect(
+      needsDependencyInstall({ lockMtimeMs: 100, installedLockMtimeMs: null }),
+    ).toBe(true);
+  });
+
+  it("does nothing without a lockfile", () => {
+    expect(
+      needsDependencyInstall({ lockMtimeMs: null, installedLockMtimeMs: null }),
+    ).toBe(false);
   });
 });
