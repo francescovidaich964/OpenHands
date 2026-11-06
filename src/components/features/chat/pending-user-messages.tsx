@@ -80,6 +80,9 @@ export function PendingUserMessages({
             message.imageUrls,
             message.fileUrls,
             message.timestamp,
+            // The passage-quote envelope is not in `content`, so a retry has to
+            // replay it as its own part or the re-sent message loses the quote.
+            message.extraTextParts,
           ),
         );
       } catch (error) {

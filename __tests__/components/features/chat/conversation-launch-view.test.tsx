@@ -1,6 +1,7 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConversationLaunchView } from "#/components/features/chat/conversation-launch-view";
 import { NavigationProvider } from "#/context/navigation-context";
 import { ActiveBackendProvider } from "#/contexts/active-backend-context";
@@ -27,18 +28,23 @@ vi.mock(
 const navigate = vi.fn();
 function view(id: string) {
   return (
-    <ActiveBackendProvider>
-      <NavigationProvider
-        value={{
-          navigate,
-          currentPath: `/conversations/${id}`,
-          conversationId: id,
-          isNavigating: false,
-        }}
-      >
-        <ConversationLaunchView launchId={id} />
-      </NavigationProvider>
-    </ActiveBackendProvider>
+    // The launch view renders the prompt through ChatMessage, whose jump-to-event
+    // hook reads the conversation query — so it needs a QueryClient like any other
+    // screen that shows a message bubble.
+    <QueryClientProvider client={new QueryClient()}>
+      <ActiveBackendProvider>
+        <NavigationProvider
+          value={{
+            navigate,
+            currentPath: `/conversations/${id}`,
+            conversationId: id,
+            isNavigating: false,
+          }}
+        >
+          <ConversationLaunchView launchId={id} />
+        </NavigationProvider>
+      </ActiveBackendProvider>
+    </QueryClientProvider>
   );
 }
 function begin() {
