@@ -287,6 +287,111 @@ describe("AgentSettingsScreen", () => {
     });
   });
 
+  it("keeps a stored <model>/<effort> id whole", async () => {
+    acpModelDiscoveryMock.mockReturnValue({
+      ...NO_DISCOVERY,
+      models: CLAUDE_MODELS,
+      source: "live",
+    });
+    const { control } = renderAgentSettingsScreen({
+      agentSettingsOverride: { ...CLAUDE_PROFILE, acp_model: "haiku/high" },
+    });
+
+    await screen.findByTestId("agent-command-input");
+
+    // The model field marks the bare id, the effort field owns the suffix, and
+    // saving writes back exactly what was stored.
+    expect(screen.getByLabelText("SETTINGS$AGENT_MODEL")).toHaveValue("Haiku");
+    expect(screen.getByLabelText("MODEL$EFFORT")).toHaveValue("high");
+    expect(control().buildAgentProfileFields()).toMatchObject({
+      acp_model: "haiku/high",
+    });
+  });
+
+  it("builds the picked effort into the saved ACP model", async () => {
+    acpModelDiscoveryMock.mockReturnValue({
+      ...NO_DISCOVERY,
+      models: CLAUDE_MODELS,
+      source: "live",
+    });
+    const user = userEvent.setup();
+    const { control } = renderAgentSettingsScreen({
+      agentSettingsOverride: CLAUDE_PROFILE,
+    });
+
+    await screen.findByTestId("agent-command-input");
+    await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+    await user.click(await screen.findByText("Haiku"));
+    await user.click(screen.getByLabelText("MODEL$EFFORT"));
+    await user.click(await screen.findByText("xhigh"));
+
+    expect(control().buildAgentProfileFields()).toMatchObject({
+      acp_model: "haiku/xhigh",
+    });
+  });
+
+  it("saves the bare id again when effort is set back to Default", async () => {
+    acpModelDiscoveryMock.mockReturnValue({
+      ...NO_DISCOVERY,
+      models: CLAUDE_MODELS,
+      source: "live",
+    });
+    const user = userEvent.setup();
+    const { control } = renderAgentSettingsScreen({
+      agentSettingsOverride: { ...CLAUDE_PROFILE, acp_model: "haiku/high" },
+    });
+
+    await screen.findByTestId("agent-command-input");
+    await user.click(screen.getByLabelText("MODEL$EFFORT"));
+    await user.click(await screen.findByText("MODEL$EFFORT_DEFAULT"));
+
+    expect(control().buildAgentProfileFields()).toMatchObject({
+      acp_model: "haiku",
+    });
+  });
+
+  it("keeps the effort when a different model is picked", async () => {
+    acpModelDiscoveryMock.mockReturnValue({
+      ...NO_DISCOVERY,
+      models: CLAUDE_MODELS,
+      source: "live",
+    });
+    const user = userEvent.setup();
+    const { control } = renderAgentSettingsScreen({
+      agentSettingsOverride: { ...CLAUDE_PROFILE, acp_model: "haiku/high" },
+    });
+
+    await screen.findByTestId("agent-command-input");
+    await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
+    await user.click(await screen.findByText("Default (recommended)"));
+
+    expect(control().buildAgentProfileFields()).toMatchObject({
+      acp_model: "default/high",
+    });
+  });
+
+  it("shows no effort field for an ACP server without effort levels", async () => {
+    acpModelDiscoveryMock.mockReturnValue({
+      ...NO_DISCOVERY,
+      models: CLAUDE_MODELS,
+      source: "live",
+    });
+    renderAgentSettingsScreen({
+      agentSettingsOverride: {
+        ...CLAUDE_PROFILE,
+        acp_command: [...OPENCODE_PROVIDER.default_command],
+        acp_model: "claude-sonnet",
+      },
+    });
+
+    await screen.findByTestId("agent-command-input");
+
+    expect(screen.getByLabelText("SETTINGS$AGENT_MODEL")).toHaveValue(
+      "claude-sonnet",
+    );
+    expect(screen.queryByLabelText("MODEL$EFFORT")).toBeNull();
+  });
+
   it("offers OpenCode and leaves its default command to the profile resolver", async () => {
     const user = userEvent.setup();
     const { control } = renderAgentSettingsScreen({

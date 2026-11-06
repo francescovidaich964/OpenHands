@@ -11,6 +11,10 @@ import {
   labelForAcpModel,
   resolveAcpProviderIcon,
 } from "#/constants/acp-providers";
+import {
+  getAcpEffortLevels,
+  splitAcpModelEffort,
+} from "#/constants/acp-effort";
 import { useFreeModels } from "#/hooks/query/use-free-models";
 import { useRememberedAcpModels } from "#/hooks/use-remembered-acp-models";
 import { formatNativeModelName } from "#/utils/format-model-name";
@@ -115,11 +119,20 @@ export function ConversationCardFooter({
         getAcpProviderDisplayName(acpServer) ??
         t(I18nKey.CONVERSATION$ACP_AGENT_GENERIC);
       // Prefer the label the agent gave the model over its raw ID, and the
-      // provider name when there's no model at all.
-      const modelLabel = labelForAcpModel(
+      // provider name when there's no model at all. The effort suffix is not
+      // part of any reported label, so it is read off separately and re-joined.
+      const { model: baseModel, effort } = splitAcpModelEffort(
         llmModel,
+        getAcpEffortLevels(acpServer),
+      );
+      const labelledModel = labelForAcpModel(
+        baseModel,
         acpModels?.length ? acpModels : rememberedModels,
       );
+      const modelLabel =
+        labelledModel && effort
+          ? `${labelledModel} · ${effort}`
+          : labelledModel;
       const text = modelLabel ?? providerName;
       chip = {
         kind: resolveAcpProviderIcon(acpServer),

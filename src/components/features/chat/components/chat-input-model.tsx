@@ -4,6 +4,7 @@ import {
   type ChatInputModelState,
 } from "#/hooks/use-chat-input-model-state";
 import { useSwitchAcpModel } from "#/hooks/mutation/use-switch-acp-model";
+import { joinAcpModelEffort } from "#/constants/acp-effort";
 import { useModelStore } from "#/stores/model-store";
 import { ComboboxCaretInline } from "#/ui/combobox-caret";
 import SettingsGearIcon from "#/icons/settings-gear.svg?react";
@@ -57,8 +58,11 @@ export function ChatInputModelMenuContent({
   // Locked-to-Cloud blocks the Canvas settings pages this links to (OHE-3457).
   const showSettingsLink = getLockedCloudHost() === null;
 
-  const handleSelectAcpModel = (modelId: string | null) => {
-    if (modelId !== model.selectedModelId) {
+  // A model pick keeps the current effort (the user is changing the model, not
+  // the reasoning level) and an effort pick keeps the model; both send the
+  // combined `<model>/<effort>` id the SDK splits into model + effort options.
+  const applySelection = (nextModelId: string | null) => {
+    if (nextModelId !== model.selectedModelId) {
       // A home-page ACP model pick (no conversation) is an explicit model
       // choice made before the first message: mark it so the next home launch
       // suppresses "Run on first message" routing for that one conversation.
@@ -68,9 +72,18 @@ export function ChatInputModelMenuContent({
       }
       switchAcpModel.mutate({
         conversationId: model.switchConversationId,
-        model: modelId,
+        model: nextModelId,
       });
     }
+  };
+
+  const handleSelectAcpModel = (modelId: string | null) => {
+    applySelection(joinAcpModelEffort(modelId, model.selectedEffort));
+    onClose();
+  };
+
+  const handleSelectEffort = (effort: string | null) => {
+    applySelection(joinAcpModelEffort(model.selectedModelBase, effort));
     onClose();
   };
 
@@ -92,7 +105,7 @@ export function ChatInputModelMenuContent({
               : []),
             ...model.availableAcpModels,
           ].map((option) => {
-            const isSelected = option.id === model.selectedModelId;
+            const isSelected = option.id === model.selectedModelBase;
             return (
               <ContextMenuListItem
                 key={option.id ?? ""}
@@ -124,6 +137,48 @@ export function ChatInputModelMenuContent({
               </ContextMenuListItem>
             );
           })}
+          {model.showEffortPicker && (
+            <>
+              <Divider inset={dividerInset} />
+              <li role="presentation" className="px-2 pt-1 pb-0.5">
+                <Typography.Text className="text-2xs font-medium text-text-dim uppercase tracking-wide leading-4">
+                  {t(I18nKey.MODEL$EFFORT)}
+                </Typography.Text>
+              </li>
+              {[null, ...model.effortLevels].map((effort) => {
+                const isSelected = effort === model.selectedEffort;
+                return (
+                  <ContextMenuListItem
+                    key={effort ?? "default"}
+                    testId={`chat-input-acp-effort-option-${effort ?? "default"}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      handleSelectEffort(effort);
+                    }}
+                    className={cn(
+                      "flex items-center gap-2",
+                      isSelected && "bg-interactive-hover",
+                    )}
+                  >
+                    {/* The level is the agent's own option value: rendered as
+                        sent, so only the "no suffix" row needs a label. */}
+                    <span className="flex-1 truncate text-sm leading-5">
+                      {effort ?? t(I18nKey.MODEL$EFFORT_DEFAULT)}
+                    </span>
+                    {isSelected && (
+                      <CheckIcon
+                        width={14}
+                        height={14}
+                        className="shrink-0"
+                        aria-hidden
+                      />
+                    )}
+                  </ContextMenuListItem>
+                );
+              })}
+            </>
+          )}
         </>
       ) : model.displayModel ? (
         <li className="text-sm">
