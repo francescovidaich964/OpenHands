@@ -1,7 +1,10 @@
 import EventService from "#/api/event-service/event-service.api";
 import { useSpaceStore } from "#/stores/space-store";
 import { loadCompleteTranscriptEvents } from "#/utils/transcript-export/load-complete-events";
-import { transcriptMessagesFromEvents } from "#/utils/space-transcript";
+import {
+  capTranscriptMessages,
+  transcriptMessagesFromEvents,
+} from "#/utils/space-transcript";
 import {
   readStoredSpaceSummaries,
   requestSpaceSummary,
@@ -36,7 +39,7 @@ async function loadConversationMessages(conversationId: string) {
     [],
     searchEvents,
   )) as OpenHandsEvent[];
-  return transcriptMessagesFromEvents(events);
+  return capTranscriptMessages(transcriptMessagesFromEvents(events));
 }
 
 /**

@@ -55,6 +55,7 @@ import {
   collectTagFacets,
   DEFAULT_OLDER_CONVERSATION_CUTOFF,
   filterOutPinnedConversations,
+  filterOutSpaceMemberConversations,
   getGroupDiscoveryConversationIds,
   groupConversations,
   isOlderConversationCutoff,
@@ -558,25 +559,40 @@ export function ConversationPanel({
     }
   }, [pinnedIds.length]);
 
-  const scopedConversations = React.useMemo(() => {
+  const scopeFilteredConversations = React.useMemo(() => {
     // The pinned section intentionally bypasses the automation and tag
     // filters (same exemption the thread scope has): a pin is an explicit
     // user override.
-    const scopeFiltered =
-      threadScope === "relevant"
-        ? tagFilteredConversations.filter((c) =>
-            isExecutionActive(c.execution_status),
-          )
-        : tagFilteredConversations;
+    if (threadScope === "relevant") {
+      return tagFilteredConversations.filter((c) =>
+        isExecutionActive(c.execution_status),
+      );
+    }
+    return tagFilteredConversations;
+  }, [tagFilteredConversations, threadScope]);
 
+  /**
+   * What the space folders render their members from: the same scoped, searched
+   * and tag-filtered set the lists below get (minus the pins, which have their
+   * own section), so a folder cannot show a conversation the active filter
+   * excluded. Members are still in it — this is the set they live in.
+   */
+  const spaceFolderConversations = React.useMemo(
+    () => filterOutPinnedConversations(scopeFilteredConversations, pinnedIds),
+    [scopeFilteredConversations, pinnedIds],
+  );
+
+  const scopedConversations = React.useMemo(() => {
     // In the expanded panel, pinned conversations should only appear inside
-    // the dedicated pinned section (not duplicated in grouped/flat lists).
+    // the dedicated pinned section and space members only inside their space
+    // folder (not duplicated in grouped/flat lists). The compact rail has
+    // neither, so it keeps every row.
     if (compact) {
-      return scopeFiltered;
+      return scopeFilteredConversations;
     }
 
-    return filterOutPinnedConversations(scopeFiltered, pinnedIds);
-  }, [tagFilteredConversations, compact, pinnedIds, threadScope]);
+    return filterOutSpaceMemberConversations(spaceFolderConversations);
+  }, [compact, scopeFilteredConversations, spaceFolderConversations]);
 
   const { recent: recentScoped, older: olderScoped } = React.useMemo(() => {
     const cutoff = isOlderConversationCutoff(olderConversationCutoff)
@@ -1496,6 +1512,7 @@ export function ConversationPanel({
         {!showInitialSkeleton && !compact ? (
           <SpaceFolderList
             conversations={allLoadedConversations}
+            visibleConversations={spaceFolderConversations}
             renderConversationCard={(conversation) =>
               renderConversationCard(conversation)
             }

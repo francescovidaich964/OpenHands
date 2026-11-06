@@ -268,7 +268,9 @@ export function selectSpaceMemberIds(
 }
 
 /** Spaces in display order (unknown-order spaces keep their creation order). */
-export function selectOrderedSpaces(state: SpaceStoreState): Space[] {
+export function selectOrderedSpaces(
+  state: Pick<SpaceStoreState, "spaces" | "spaceOrder">,
+): Space[] {
   const known = state.spaceOrder
     .map((id) => state.spaces[id])
     .filter((space): space is Space => Boolean(space));

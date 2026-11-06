@@ -37,11 +37,13 @@ export function spaceContextForFirstMessage(
     state.spaces[spaceId]?.title ?? "",
     sessions,
   );
-  if (block.droppedSummaryCount > 0) {
+  if (block.droppedSummaryCount > 0 || block.droppedSessionCount > 0) {
     // Our cap, not Devin's: say what was dropped instead of silently trimming.
     console.warn(
-      `[spaces] Space context over budget: dropped ${block.droppedSummaryCount} summary(ies) to empty <session/> tags.`,
+      `[spaces] Space context over budget: dropped ${block.droppedSummaryCount} summary(ies) to empty <session/> tags and ${block.droppedSessionCount} member(s) entirely.`,
     );
   }
-  return block;
+  // The cap can empty the block (members whose titles alone blow the budget);
+  // sending an empty text part would only confuse the bubble matching.
+  return block.text ? block : null;
 }

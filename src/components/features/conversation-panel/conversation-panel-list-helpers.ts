@@ -16,6 +16,7 @@ import {
   AUTOMATION_SETUP_TAG_KEY,
   AUTOMATION_SETUP_TAG_VALUE,
 } from "#/utils/automation-draft-tags";
+import { spaceIdFromTags } from "#/utils/space-tags";
 
 export type ConversationSortField = "created" | "updated";
 export type ThreadScope = "all" | "relevant";
@@ -207,6 +208,21 @@ export function filterOutPinnedConversations(
   const pinnedSet = new Set(pinnedIds);
   return conversations.filter(
     (conversation) => !pinnedSet.has(conversation.id),
+  );
+}
+
+/**
+ * Fork feature (Spaces): members belong inside their space folder, so the flat
+ * and grouped lists must not show them a second time — the same rule
+ * `filterOutPinnedConversations` enforces for pins. Membership is read off the
+ * conversation's own `canvasspace` tag (the server-side source of truth), so
+ * this needs no store round trip and cannot lag a tag write by a render.
+ */
+export function filterOutSpaceMemberConversations(
+  conversations: readonly AppConversation[],
+): AppConversation[] {
+  return conversations.filter(
+    (conversation) => !spaceIdFromTags(conversation.tags),
   );
 }
 

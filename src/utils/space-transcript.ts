@@ -46,3 +46,58 @@ export function transcriptMessagesFromEvents(
   }
   return messages;
 }
+
+/** Devin's transcript cap again (`TRANSCRIPT_CHAR_LIMIT` in the main process). */
+export const RENDERER_TRANSCRIPT_CHAR_LIMIT = 200_000;
+
+/**
+ * Placeholder text for a message whose body the cap dropped. It stays non-empty
+ * on purpose: the main process stores `messages.length` as its incremental
+ * cursor, so the COUNT of this list is part of the contract and a dropped
+ * message would make every later digest slice the transcript at the wrong place.
+ */
+const OMITTED_MESSAGE_TEXT = "[]";
+
+/**
+ * Bounds what goes over IPC (reports/R4.md NIT): without it a space of ten long
+ * conversations materialises ten full transcripts in the renderer and ships them
+ * all to the main process, which then cuts them to 200k characters anyway.
+ *
+ * Devin's proportions, applied to the messages instead of the joined text: the
+ * head half of the budget and the tail quarter stay whole, the middle becomes
+ * placeholders. The main process still owns the real formatting and the real cap;
+ * this only stops the renderer from sending a payload nobody can read.
+ */
+export function capTranscriptMessages(
+  messages: TranscriptMessage[],
+  limit = RENDERER_TRANSCRIPT_CHAR_LIMIT,
+): TranscriptMessage[] {
+  const total = messages.reduce((sum, message) => sum + message.text.length, 0);
+  if (total <= limit) return messages;
+
+  const capped = [...messages];
+  let headUsed = 0;
+  let index = 0;
+  while (
+    index < capped.length &&
+    headUsed + capped[index].text.length + 1 <= Math.floor(limit / 2)
+  ) {
+    headUsed += capped[index].text.length + 1;
+    index += 1;
+  }
+
+  let tailUsed = 0;
+  let last = capped.length - 1;
+  while (
+    last > index &&
+    tailUsed + capped[last].text.length + 1 <= Math.floor(limit / 4)
+  ) {
+    tailUsed += capped[last].text.length + 1;
+    last -= 1;
+  }
+
+  for (let middle = index; middle <= last; middle += 1) {
+    capped[middle] = { role: capped[middle].role, text: OMITTED_MESSAGE_TEXT };
+  }
+  return capped;
+}

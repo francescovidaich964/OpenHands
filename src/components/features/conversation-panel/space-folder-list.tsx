@@ -5,7 +5,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useNavigate } from "react-router";
 import {
   Folder,
   FolderOpen,
@@ -19,7 +18,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { AppConversation } from "#/api/conversation-service/agent-server-conversation-service.types";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
-import { useBackendScopedPath } from "#/hooks/use-backend-scoped-path";
+import { useNavigation } from "#/context/navigation-context";
 import { useSpaceMembership } from "#/hooks/use-space-membership";
 import { I18nKey } from "#/i18n/declaration";
 import {
@@ -31,8 +30,14 @@ import { refreshSpaceSummaries } from "#/utils/space-summary-runner";
 import { cn } from "#/utils/utils";
 
 export interface SpaceFolderListProps {
-  /** Every conversation the sidebar has loaded (members are picked from it). */
+  /**
+   * Every conversation the sidebar has loaded: the membership tags are folded
+   * from it and the member picker offers all of it. Not what the folders render
+   * — see `visibleConversations`.
+   */
   conversations: AppConversation[];
+  /** The scoped / searched / tag-filtered set the flat list renders from. */
+  visibleConversations: AppConversation[];
   renderConversationCard: (conversation: AppConversation) => ReactNode;
   isCreatingConversationFlow: boolean;
 }
@@ -64,17 +69,33 @@ function mostRecent<T extends { updated_at?: string | null }>(
  */
 export function SpaceFolderList({
   conversations,
+  visibleConversations,
   renderConversationCard,
   isCreatingConversationFlow,
 }: SpaceFolderListProps) {
   const { t } = useTranslation("openhands");
-  const navigate = useNavigate();
-  const backendScopedPath = useBackendScopedPath();
+  // The app's own navigation seam: it keeps this subtree renderable without a
+  // Router (the sidebar's tests mount the panel bare), and it is how the panel
+  // itself navigates — plain paths, no backend params (those are for hrefs a
+  // new tab can be opened with).
+  const { navigate } = useNavigation();
   const { mutate: createConversation } = useCreateConversation();
   const moveConversation = useSpaceMembership();
-  const spaceStore = useSpaceStore();
-  const { syncMembershipFromTags, createSpace, renameSpace, deleteSpace } =
-    spaceStore;
+  // Selectors, not the whole store: every digest hydration would otherwise
+  // re-render every folder and every member card.
+  const spaces = useSpaceStore((state) => state.spaces);
+  const spaceOrder = useSpaceStore((state) => state.spaceOrder);
+  const members = useSpaceStore((state) => state.members);
+  const collapsedSpaceIds = useSpaceStore((state) => state.collapsedSpaceIds);
+  const syncMembershipFromTags = useSpaceStore(
+    (state) => state.syncMembershipFromTags,
+  );
+  const createSpace = useSpaceStore((state) => state.createSpace);
+  const renameSpace = useSpaceStore((state) => state.renameSpace);
+  const deleteSpace = useSpaceStore((state) => state.deleteSpace);
+  const toggleSpaceCollapsed = useSpaceStore(
+    (state) => state.toggleSpaceCollapsed,
+  );
 
   // The server-side tags are the source of truth for membership: fold them in
   // (and remember titles for the <session title="…"> attributes).
@@ -88,15 +109,21 @@ export function SpaceFolderList({
     );
   }, [conversations, syncMembershipFromTags]);
 
-  const conversationsById = useMemo(
+  const visibleConversationsById = useMemo(
     () =>
       new Map(
-        conversations.map((conversation) => [conversation.id, conversation]),
+        visibleConversations.map((conversation) => [
+          conversation.id,
+          conversation,
+        ]),
       ),
-    [conversations],
+    [visibleConversations],
   );
 
-  const spaces = useMemo(() => selectOrderedSpaces(spaceStore), [spaceStore]);
+  const orderedSpaces = useMemo(
+    () => selectOrderedSpaces({ spaces, spaceOrder }),
+    [spaces, spaceOrder],
+  );
 
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -108,10 +135,10 @@ export function SpaceFolderList({
   const startConversationInSpace = useCallback(
     (spaceId: string) => {
       if (isCreatingConversationFlow) return;
-      const memberIds = selectSpaceMemberIds(spaceStore, spaceId);
+      const memberIds = selectSpaceMemberIds(useSpaceStore.getState(), spaceId);
       const sample = mostRecent(
         memberIds
-          .map((id) => conversationsById.get(id))
+          .map((id) => visibleConversationsById.get(id))
           .filter((conversation): conversation is AppConversation =>
             Boolean(conversation),
           ),
@@ -127,21 +154,17 @@ export function SpaceFolderList({
         {
           onSuccess: (data) => {
             void moveConversation(data.conversation_id, spaceId);
-            navigate(
-              backendScopedPath(`/conversations/${data.conversation_id}`),
-            );
+            navigate(`/conversations/${data.conversation_id}`);
           },
         },
       );
     },
     [
-      backendScopedPath,
-      conversationsById,
       createConversation,
       isCreatingConversationFlow,
       moveConversation,
       navigate,
-      spaceStore.members,
+      visibleConversationsById,
     ],
   );
 
@@ -159,7 +182,7 @@ export function SpaceFolderList({
     );
   }, []);
 
-  if (spaces.length === 0 && draftTitle === null) {
+  if (orderedSpaces.length === 0 && draftTitle === null) {
     // Nothing grouped yet: the sidebar shows only the action that creates the
     // first space, so an empty Spaces section never eats vertical space.
     return (
@@ -179,11 +202,13 @@ export function SpaceFolderList({
 
   return (
     <nav aria-label={t(I18nKey.SPACE$TITLE)} className="space-y-1 pb-1">
-      {spaces.map((space) => {
-        const memberIds = selectSpaceMemberIds(spaceStore, space.id);
-        const collapsed = spaceStore.collapsedSpaceIds.includes(space.id);
-        const members = memberIds
-          .map((id) => conversationsById.get(id))
+      {orderedSpaces.map((space) => {
+        const memberIds = selectSpaceMemberIds({ members }, space.id);
+        const collapsed = collapsedSpaceIds.includes(space.id);
+        // Only the filtered set: a folder lists the same conversations the rest
+        // of the sidebar is showing, never ones the scope or search excluded.
+        const visibleMembers = memberIds
+          .map((id) => visibleConversationsById.get(id))
           .filter((conversation): conversation is AppConversation =>
             Boolean(conversation),
           );
@@ -209,7 +234,7 @@ export function SpaceFolderList({
                     : I18nKey.CONVERSATION_PANEL$COLLAPSE_FOLDER,
                   { label },
                 )}
-                onClick={() => spaceStore.toggleSpaceCollapsed(space.id)}
+                onClick={() => toggleSpaceCollapsed(space.id)}
                 className="group/folder flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left text-muted outline-none transition-colors hover:bg-surface-raised hover:text-contrast focus-visible:ring-1 focus-visible:ring-border"
               >
                 {collapsed ? (
@@ -340,10 +365,9 @@ export function SpaceFolderList({
                   {t(I18nKey.SPACE$MEMBERS)}
                 </div>
                 {conversations.map((conversation) => {
-                  const isMember =
-                    spaceStore.members[conversation.id] === space.id;
+                  const isMember = members[conversation.id] === space.id;
                   const isSharedElsewhere =
-                    Boolean(spaceStore.members[conversation.id]) && !isMember;
+                    Boolean(members[conversation.id]) && !isMember;
                   return (
                     <button
                       key={conversation.id}
@@ -384,13 +408,13 @@ export function SpaceFolderList({
 
             {!collapsed ? (
               <div className="mt-0.5 space-y-0.5">
-                {members.map((conversation) => (
+                {visibleMembers.map((conversation) => (
                   <div
                     key={conversation.id}
                     className="group/space-member relative"
                   >
                     {renderConversationCard(conversation)}
-                    {spaceStore.members[conversation.id] === space.id ? (
+                    {members[conversation.id] === space.id ? (
                       <button
                         type="button"
                         aria-label={t(I18nKey.SPACE$MOVE_OUT)}
@@ -411,7 +435,7 @@ export function SpaceFolderList({
                     ) : null}
                   </div>
                 ))}
-                {members.length === 0 ? (
+                {visibleMembers.length === 0 ? (
                   <div className="pl-2 text-xs text-text-dim">
                     {t(I18nKey.SPACE$EMPTY)}
                   </div>

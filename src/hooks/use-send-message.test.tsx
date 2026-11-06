@@ -138,4 +138,32 @@ describe("useSendMessage and space context", () => {
       "image",
     ]);
   });
+
+  it("does not count the context as injected while the message is held", async () => {
+    const spaceId = state().createSpace("S");
+    state().assignSpace("c-me", spaceId);
+    state().assignSpace("c-other", spaceId);
+    state().setSummary("c-other", "digest", 2);
+    // A cloud sandbox that is PAUSED/STARTING: nothing has carried the frame.
+    sendMessage.mockResolvedValue({ queued: true, held: true });
+
+    await send("first");
+
+    // flushHeldMessages marks it when the socket really writes the frame; until
+    // then a restart must be able to deliver the block again.
+    expect(state().contextInjected["c-me"]).toBeUndefined();
+  });
+
+  it("counts the context as injected when the runtime took the message directly", async () => {
+    const spaceId = state().createSpace("S");
+    state().assignSpace("c-me", spaceId);
+    state().assignSpace("c-other", spaceId);
+    state().setSummary("c-other", "digest", 2);
+    // Reachable runtime, closed socket: delivered by POST, and queued is true.
+    sendMessage.mockResolvedValue({ queued: true });
+
+    await send("first");
+
+    expect(state().contextInjected["c-me"]).toBe(true);
+  });
 });

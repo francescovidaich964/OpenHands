@@ -65,9 +65,11 @@ export function useSendMessage() {
             role: "user",
             content,
           });
-          if (spaceContext && conversationId) {
-            // Only once it is really sent, so a failed send can still deliver
-            // the context on the retry.
+          if (spaceContext && conversationId && !result.held) {
+            // Only once the frame really left (or the runtime took it directly),
+            // so a failed send can still deliver the context on the retry. A
+            // message still held for a starting sandbox is marked by
+            // `flushHeldMessages` when the socket actually carries it.
             useSpaceStore.getState().markContextInjected(conversationId);
           }
           return result;
