@@ -58,6 +58,7 @@ import { isExternalBrowsableUrl, isLoopbackAppUrl } from "./lib/window-url-polic
 import { resolveBundledRuntimeDir } from "./lib/bundled-runtime-dir.mjs";
 import { registerSelfUpdate } from "./self-update.mjs";
 import { registerUpstreamSync } from "./upstream-sync.mjs";
+import { registerSpaceSummary } from "./space-summary.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -799,6 +800,15 @@ app.whenReady().then(async () => {
       buildStartedMs: selfUpdate.buildStartedMs,
       buildInfo: selfUpdate.buildInfo,
       repoPath: selfUpdate.repoPath,
+    });
+
+    // Fork-only Spaces summariser (see space-summary.mjs): one headless
+    // `claude -p` call per conversation digest, spawned here so the renderer
+    // never runs a process.
+    registerSpaceSummary({
+      app,
+      ipcMain,
+      getMainWindow: () => mainWin,
     });
   } catch (err) {
     console.error("[desktop] fork build/sync features are unavailable:", err);
