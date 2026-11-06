@@ -186,6 +186,15 @@ export interface AppConversation {
    */
   acp_server?: string | null;
   /**
+   * The argv the conversation's ACP subprocess runs (``agent.acp_command`` plus the
+   * ``agent.acp_args`` the server appends), or ``null`` when the payload carried
+   * none. The model picker sends it to ``POST /api/acp/models`` when it differs from
+   * the provider's registry default command, so the list comes from the agent this
+   * chat actually runs rather than the version the registry happens to pin
+   * (``acpCommandOverride``).
+   */
+  acp_command?: string[] | null;
+  /**
    * Models the conversation's ACP session offers, as its server reported them.
    * Empty before the session starts and on servers that don't report models.
    */

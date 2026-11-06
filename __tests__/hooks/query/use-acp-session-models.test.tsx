@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAcpSessionModels } from "#/hooks/query/use-acp-session-models";
 import type { AppConversation } from "#/api/conversation-service/agent-server-conversation-service.types";
+import { getAcpProvider } from "#/constants/acp-providers";
 import {
   acpModelScope,
   readRememberedAcpModels,
@@ -140,5 +141,51 @@ describe("useAcpSessionModels", () => {
     );
 
     expect(readRememberedAcpModels("local-1", "custom")).toEqual([]);
+  });
+
+  it("keeps a pinned command's list out of the default command's scope", () => {
+    backendMock.current = { backend: { id: "local-1", kind: "local" } };
+    const command = [
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.99.1",
+    ];
+
+    renderHook(
+      () =>
+        useAcpSessionModels(
+          conversation({ acp_available_models: MODELS, acp_command: command }),
+        ),
+      { wrapper },
+    );
+
+    expect(
+      readRememberedAcpModels(
+        "local-1",
+        "claude-code",
+        acpModelScope(null, command),
+      ),
+    ).toEqual(MODELS);
+    // The other chat on this provider keeps the list its own agent reported.
+    expect(readRememberedAcpModels("local-1", "claude-code", ALL)).toEqual([]);
+  });
+
+  it("remembers a default-command conversation under the pre-override scope", () => {
+    backendMock.current = { backend: { id: "local-1", kind: "local" } };
+
+    renderHook(
+      () =>
+        useAcpSessionModels(
+          conversation({
+            acp_available_models: MODELS,
+            acp_command: getAcpProvider("claude-code")?.default_command ?? null,
+          }),
+        ),
+      { wrapper },
+    );
+
+    expect(readRememberedAcpModels("local-1", "claude-code", ALL)).toEqual(
+      MODELS,
+    );
   });
 });

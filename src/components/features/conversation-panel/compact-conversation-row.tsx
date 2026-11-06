@@ -32,6 +32,8 @@ interface CompactConversationRowProps {
   agentKind?: "openhands" | "acp" | null;
   acpServer?: string | null;
   acpModels?: readonly ACPModelOption[] | null;
+  /** Which remembered-model list the chip falls back to; see the footer prop. */
+  acpModelScope?: string | null;
   tags?: Record<string, string> | null;
   showTags?: boolean;
   /**
@@ -65,6 +67,7 @@ export function CompactConversationRow({
   agentKind = null,
   acpServer = null,
   acpModels = null,
+  acpModelScope = null,
   tags = null,
   showTags = false,
   isArchived,
@@ -105,6 +108,7 @@ export function CompactConversationRow({
         agentKind={agentKind}
         acpServer={acpServer}
         acpModels={acpModels}
+        acpModelScope={acpModelScope}
         tags={tags}
         showTags={showTags}
         isArchived={effectiveArchived}

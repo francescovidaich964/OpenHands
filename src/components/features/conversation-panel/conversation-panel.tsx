@@ -74,6 +74,7 @@ import {
 } from "#/utils/conversation-tag-flags";
 import { uniqueById } from "#/utils/unique-by-id";
 import { isEffectivelyArchivedConversation } from "#/utils/conversation-archive-status";
+import { acpConversationModelScope } from "#/utils/remembered-acp-models";
 import type { SandboxStatus } from "#/api/conversation-service/agent-server-conversation-service.types";
 
 interface ConversationPanelProps {
@@ -1126,6 +1127,7 @@ export function ConversationPanel({
             agentKind={conversation.agent_kind}
             acpServer={conversation.acp_server}
             acpModels={conversation.acp_available_models}
+            acpModelScope={acpConversationModelScope(conversation)}
             tags={conversation.tags}
             showTags={showTagsMetadata}
             isArchived={isArchived}

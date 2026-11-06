@@ -18,6 +18,7 @@ import { I18nKey } from "#/i18n/declaration";
 import { cn } from "#/utils/utils";
 import { getLockedCloudHost } from "#/api/agent-server-config";
 import { chatInputPillButtonClassName } from "#/utils/form-control-classes";
+import { withoutDuplicateAcpDefault } from "#/constants/acp-providers";
 import React from "react";
 
 const MODEL_LABEL_MAX_CHARS = 10;
@@ -54,6 +55,15 @@ export function ChatInputModelMenuContent({
   const { t } = useTranslation("openhands");
   const switchAcpModel = useSwitchAcpModel();
   const hasModelRows = model.showAcpPicker || Boolean(model.displayModel);
+  // The adapter's own ``default`` entry means the same thing as the "Agent
+  // default" row this picker adds for it, so it is dropped while that row is
+  // offered — except when it is the saved model, which must stay listed to be
+  // labelled and re-selected.
+  const modelOptions = withoutDuplicateAcpDefault(
+    model.availableAcpModels,
+    Boolean(model.agentDefaultLabel),
+    model.selectedModelId,
+  );
   // Locked-to-Cloud blocks the Canvas settings pages this links to (OHE-3457).
   const showSettingsLink = getLockedCloudHost() === null;
 
@@ -90,7 +100,7 @@ export function ChatInputModelMenuContent({
             ...(model.agentDefaultLabel
               ? [{ id: null, label: model.agentDefaultLabel }]
               : []),
-            ...model.availableAcpModels,
+            ...modelOptions,
           ].map((option) => {
             const isSelected = option.id === model.selectedModelId;
             return (

@@ -132,6 +132,15 @@ export interface DirectConversationInfo {
      * client-side and the server may not repopulate it. Read by {@link toAppConversation}.
      */
     acp_server?: string | null;
+    /**
+     * The argv this conversation's ACP subprocess actually runs (``acp_command``
+     * plus the ``acp_args`` the server appends to it). Read by
+     * {@link toAppConversation} so the model picker can ask that command — and only
+     * that one — for its models: a profile pinned to another version of the CLI
+     * reports a different model list than the registry default command.
+     */
+    acp_command?: string[] | null;
+    acp_args?: string[] | null;
     llm?: {
       model?: string | null;
     } | null;
@@ -419,6 +428,14 @@ export function toAppConversation(
   const acpServer = isAcp
     ? (info.tags?.[ACP_SERVER_TAG_KEY] ?? info.agent?.acp_server ?? null)
     : null;
+  // The full argv of this conversation's ACP subprocess, as one field. The server
+  // appends ``acp_args`` to ``acp_command`` when it spawns the CLI, so joining them
+  // reproduces the real command; ``null`` when the payload carries nothing (older
+  // agent-server, or a list response without ``agent``), which leaves
+  // model discovery on the provider default command like today.
+  const acpArgv = isAcp
+    ? [...(info.agent?.acp_command ?? []), ...(info.agent?.acp_args ?? [])]
+    : [];
   return {
     id: info.id,
     created_by_user_id: null,
@@ -444,6 +461,7 @@ export function toAppConversation(
     pr_number: [],
     agent_kind: isAcp ? "acp" : "openhands",
     acp_server: acpServer,
+    acp_command: acpArgv.length ? acpArgv : null,
     acp_available_models: isAcp
       ? toAcpModelOptions(info.available_models)
       : null,

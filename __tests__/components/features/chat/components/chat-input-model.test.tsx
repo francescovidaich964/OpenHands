@@ -497,4 +497,83 @@ describe("ChatInputModel", () => {
       "/settings/agents",
     );
   });
+
+  describe("the adapter's own default model", () => {
+    // What claude-agent-acp actually reports: ``default`` beside the named models.
+    const WITH_DEFAULT = [
+      { id: "default", label: "Default (recommended)" },
+      ...CLAUDE_MODELS,
+    ];
+    const homeClaude = (acpModel?: string) => {
+      discoveryMock.mockReturnValue({
+        models: WITH_DEFAULT,
+        defaultModelId: "opus[1m]",
+      });
+      useActiveConversationMock.mockReturnValue({ data: undefined });
+      useSettingsMock.mockReturnValue({
+        data: {
+          agent_settings: {
+            agent_kind: "acp",
+            acp_server: "claude-code",
+            ...(acpModel ? { acp_model: acpModel } : {}),
+          },
+        },
+      });
+    };
+
+    it("is hidden beside the picker's Agent default row, which means the same thing", () => {
+      homeClaude();
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      expect(
+        screen.getByTestId("chat-input-acp-model-option-agent-default"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("chat-input-acp-model-option-default"),
+      ).toBeNull();
+      // The rest of the agent's list is untouched.
+      expect(
+        screen.getByTestId("chat-input-acp-model-option-sonnet"),
+      ).toBeInTheDocument();
+    });
+
+    it("stays selectable inside a conversation, which offers no Agent default row", () => {
+      sessionModelsMock.mockReturnValue(WITH_DEFAULT);
+      useActiveConversationMock.mockReturnValue({
+        data: {
+          conversation_id: "test-conversation-id",
+          agent_kind: "acp",
+          acp_server: "claude-code",
+          llm_model: "sonnet",
+        },
+      });
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      expect(
+        screen.queryByTestId("chat-input-acp-model-option-agent-default"),
+      ).toBeNull();
+      fireEvent.click(
+        screen.getByTestId("chat-input-acp-model-option-default"),
+      );
+      expect(switchAcpModelMutate).toHaveBeenCalledWith({
+        conversationId: "test-conversation-id",
+        model: "default",
+      });
+    });
+
+    it("stays listed and marked when it is the saved model", () => {
+      homeClaude("default");
+
+      renderWithProviders(<ChatInputModel />);
+      fireEvent.click(screen.getByTestId("chat-input-llm-model"));
+
+      const saved = screen.getByTestId("chat-input-acp-model-option-default");
+      expect(saved).toBeInTheDocument();
+      expect(saved).toHaveClass("bg-interactive-hover");
+    });
+  });
 });

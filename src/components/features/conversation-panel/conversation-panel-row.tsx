@@ -4,6 +4,7 @@ import type { AppConversation } from "#/api/conversation-service/agent-server-co
 import type { Provider } from "#/types/settings";
 import { NavigationLink } from "#/components/shared/navigation-link";
 import { cn } from "#/utils/utils";
+import { acpConversationModelScope } from "#/utils/remembered-acp-models";
 import {
   isMissingSandboxStatus,
   isRuntimeUnavailableSandboxStatus,
@@ -190,6 +191,7 @@ export const ConversationPanelRow = React.memo(function ConversationPanelRow({
           agentKind={conversation.agent_kind}
           acpServer={conversation.acp_server}
           acpModels={conversation.acp_available_models}
+          acpModelScope={acpConversationModelScope(conversation)}
           tags={conversation.tags}
           showTags={showTagsMetadata}
           isArchived={isArchived}

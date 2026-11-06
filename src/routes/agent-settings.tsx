@@ -43,11 +43,13 @@ import {
 } from "#/utils/sdk-settings-schema";
 import {
   ACP_CUSTOM_PRESET_KEY,
+  acpCommandOverride,
   getAcpPreferredDefaultModel,
   getAcpProvider,
   getAcpProvidersForBackend,
   getAcpProviderSecrets,
   labelForAcpModel,
+  withoutDuplicateAcpDefault,
   type ACPModelOption,
   type ACPProviderConfig,
 } from "#/constants/acp-providers";
@@ -1029,11 +1031,7 @@ export function AgentSettingsScreen({
   const discoveryProvider = getAcpProvider(discoveryServer);
   // Null means the provider's default command, which is the exact request — and
   // the exact cache key — the editor made before it honoured command overrides.
-  const discoveryCommand =
-    discoveryTokens.length > 0 &&
-    discoveryTokens.join(" ") !== discoveryProvider?.default_command.join(" ")
-      ? discoveryTokens
-      : null;
+  const discoveryCommand = acpCommandOverride(discoveryServer, discoveryTokens);
   const liveModels = useAcpModelDiscovery(
     // An override is asked of the server the profile names, even ``custom``: that
     // preset has no registry entry because it exists to carry a command.
@@ -1091,6 +1089,15 @@ export function AgentSettingsScreen({
   } else if (isCustomAcpModel || !selectedModelIsSuggestion) {
     selectedModelKey = ACP_CUSTOM_MODEL_KEY;
   }
+  // The "Agent default" row above the adapter's list already is the adapter's own
+  // ``default`` model, so that entry is dropped while the row is offered — except
+  // when it is the saved model, which has to stay listed to be labelled and
+  // re-selected.
+  const modelOptions = withoutDuplicateAcpDefault(
+    modelSuggestions,
+    offersAgentDefault,
+    acpModel,
+  );
   const commandPlaceholder =
     formatCommand(acpProviders[0]?.default_command ?? []) ||
     COMMAND_PLACEHOLDER_FALLBACK;
@@ -1759,7 +1766,7 @@ export function AgentSettingsScreen({
                       },
                     ]
                   : []),
-                ...modelSuggestions.map((model) => ({
+                ...modelOptions.map((model) => ({
                   key: model.id,
                   label:
                     !offersAgentDefault &&

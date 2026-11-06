@@ -12,6 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "test-utils";
 import { formatTimeDelta } from "#/utils/format-time-delta";
+import { acpModelScope } from "#/utils/remembered-acp-models";
 import { ConversationCard } from "#/components/features/conversation-panel/conversation-card/conversation-card";
 import { clickOnEditButton } from "./utils";
 import { ConversationCardActions } from "#/components/features/conversation-panel/conversation-card/conversation-card-actions";
@@ -1123,7 +1124,34 @@ describe("ConversationCard", () => {
       const chip = screen.getByTestId("conversation-card-agent-chip");
       expect(chip).toHaveTextContent("Claude Opus (1M)");
       expect(chip).toHaveAttribute("title", "Claude Code · Claude Opus (1M)");
-      expect(useRememberedAcpModels).toHaveBeenCalledWith("claude-code");
+      expect(useRememberedAcpModels).toHaveBeenCalledWith(
+        "claude-code",
+        undefined,
+      );
+      useRememberedAcpModels.mockReturnValue([]);
+    });
+
+    it("reads the remembered labels from this conversation's own scope", () => {
+      // The chat picker stores under the scope of the command this conversation
+      // runs; the chip has to read that same list rather than every scope the
+      // provider has ever reported.
+      useRememberedAcpModels.mockReturnValue([]);
+      const scope = acpModelScope(null, ["npx", "-y", "claude-acp@0.99.1"]);
+
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer="claude-code"
+          acpModelScope={scope}
+          llmModel="opus[1m]"
+        />,
+      );
+
+      expect(useRememberedAcpModels).toHaveBeenCalledWith("claude-code", scope);
       useRememberedAcpModels.mockReturnValue([]);
     });
 

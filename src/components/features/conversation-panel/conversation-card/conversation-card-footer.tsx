@@ -57,6 +57,14 @@ interface ConversationCardFooterProps {
   /** The models this conversation's session reported. */
   acpModels?: readonly ACPModelOption[] | null;
   /**
+   * Which remembered-model list to fall back to when the session reported none:
+   * ``acpConversationModelScope(conversation)``, the same scope the chat picker
+   * stores under. Left out, the chip merges every scope the provider has ever
+   * reported and can label this conversation with a model its own agent never
+   * saw (e.g. a chat pinned to another build of the same CLI).
+   */
+  acpModelScope?: string | null;
+  /**
    * Server-side conversation tags (``AppConversation.tags``). Non-reserved
    * entries render as value-only chips so API-/automation-born
    * conversations can surface attribution (e.g. ``origin: slack`` → ``slack``).
@@ -88,13 +96,17 @@ export function ConversationCardFooter({
   agentKind = null,
   acpServer = null,
   acpModels = null,
+  acpModelScope = null,
   tags = null,
   showTags = false,
   isArchived = false,
 }: ConversationCardFooterProps) {
   const { t } = useTranslation("openhands");
   const freeModels = useFreeModels();
-  const rememberedModels = useRememberedAcpModels(acpServer);
+  const rememberedModels = useRememberedAcpModels(
+    acpServer,
+    acpModelScope ?? undefined,
+  );
 
   const isPaused = isExecutionPaused(executionStatus);
 

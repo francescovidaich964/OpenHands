@@ -5,7 +5,7 @@ import type { AppConversation } from "#/api/conversation-service/agent-server-co
 import { useActiveBackend } from "#/contexts/active-backend-context";
 import { getAcpProvider, type ACPModelOption } from "#/constants/acp-providers";
 import {
-  acpModelScope,
+  acpConversationModelScope,
   rememberAcpModels,
 } from "#/utils/remembered-acp-models";
 
@@ -55,9 +55,7 @@ export function useAcpSessionModels(
     [isCloud, runtime.data, conversation?.acp_available_models],
   );
   const server = conversation?.acp_server;
-  const scope = acpModelScope(
-    conversation?.launched_agent_profile?.secret_refs,
-  );
+  const scope = acpConversationModelScope(conversation);
   useEffect(() => {
     if (server && getAcpProvider(server)) {
       rememberAcpModels(backend.id, server, scope, models);

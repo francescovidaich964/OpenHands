@@ -1,7 +1,10 @@
 import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AcpModelContext } from "#/hooks/use-acp-model-context";
-import { ACP_VERTEX_SAFE_MODEL } from "#/constants/acp-providers";
+import {
+  ACP_VERTEX_SAFE_MODEL,
+  getAcpProvider,
+} from "#/constants/acp-providers";
 
 const useActiveConversationMock = vi.fn();
 const useSettingsMock = vi.fn();
@@ -155,6 +158,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith(null, {
       enabled: true,
       secretRefs: null,
+      command: null,
     });
   });
 
@@ -185,6 +189,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("codex", {
       enabled: true,
       secretRefs: null,
+      command: null,
     });
     expect(result.current.availableAcpModels).toEqual(live);
     expect(result.current.currentModelId).toBe("gpt-5.6-terra");
@@ -222,6 +227,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("codex", {
       enabled: true,
       secretRefs: ["OPENAI_API_KEY"],
+      command: null,
     });
   });
 
@@ -251,6 +257,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("pi", {
       enabled: true,
       secretRefs: null,
+      command: null,
     });
     expect(result.current.availableAcpModels).toEqual(live);
     expect(result.current.currentModelId).toBe("anthropic/claude-opus-4-8");
@@ -450,6 +457,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("codex", {
       enabled: true,
       secretRefs: null,
+      command: null,
     });
     expect(result.current.availableAcpModels).toEqual(codexModels);
   });
@@ -472,6 +480,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("codex", {
       enabled: true,
       secretRefs: ["OPENAI_API_KEY"],
+      command: null,
     });
   });
 
@@ -488,6 +497,7 @@ describe("useChatInputModelState", () => {
     expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("codex", {
       enabled: false,
       secretRefs: null,
+      command: null,
     });
   });
 
@@ -557,5 +567,64 @@ describe("useChatInputModelState", () => {
     expect(result.current.showAcpPicker).toBe(false);
     // No reported label → falls back to the raw id.
     expect(result.current.displayModel).toBe("custom-model");
+  });
+
+  it("active ACP: discovers models from the command this conversation runs", () => {
+    // A profile pinned to another build of the CLI reports that build's models,
+    // not the ones the registry's default command would report — the picker has
+    // to ask the agent the chat actually runs.
+    const command = [
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.99.1",
+    ];
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "c1",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        acp_command: command,
+        launched_agent_profile: {
+          agent_profile_id: "id-claude",
+          revision: 1,
+          secret_refs: ["ANTHROPIC_API_KEY"],
+        },
+      },
+    });
+    useAcpModelContextMock.mockReturnValue(
+      acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+    );
+
+    renderHook(() => useChatInputModelState());
+
+    expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("claude-code", {
+      enabled: true,
+      secretRefs: ["ANTHROPIC_API_KEY"],
+      command,
+    });
+  });
+
+  it("active ACP: keeps the default-command request when the conversation runs it", () => {
+    // Same request and cache key as before the command was honoured, so
+    // default-command chats are unaffected by the conversation carrying one.
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "c1",
+        agent_kind: "acp",
+        acp_server: "claude-code",
+        acp_command: getAcpProvider("claude-code")?.default_command ?? null,
+      },
+    });
+    useAcpModelContextMock.mockReturnValue(
+      acpContext({ isActiveAcpConversation: true, isAcpContext: true }),
+    );
+
+    renderHook(() => useChatInputModelState());
+
+    expect(useAcpModelDiscoveryMock).toHaveBeenCalledWith("claude-code", {
+      enabled: true,
+      secretRefs: null,
+      command: null,
+    });
   });
 });
