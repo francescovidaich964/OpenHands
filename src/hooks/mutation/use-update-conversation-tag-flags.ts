@@ -42,12 +42,10 @@ export const useUpdateConversationTagFlags = () => {
   return useMutation({
     mutationFn: (variables: {
       conversationId: string;
-      currentTags: Record<string, string> | null | undefined;
       changes: Record<string, boolean>;
     }) =>
       AgentServerConversationService.updateConversationTagFlags(
         variables.conversationId,
-        variables.currentTags,
         variables.changes,
       ),
     onMutate: async (variables) => {

@@ -60,7 +60,6 @@ describe("useConversationReadState", () => {
     await waitFor(() =>
       expect(mutate).toHaveBeenCalledWith({
         conversationId: "conv-1",
-        currentTags: { [UNREAD_CONVERSATION_TAG_KEY]: "true" },
         changes: { [UNREAD_CONVERSATION_TAG_KEY]: false },
       }),
     );

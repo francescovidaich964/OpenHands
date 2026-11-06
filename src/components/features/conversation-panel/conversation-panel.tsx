@@ -526,7 +526,6 @@ export function ConversationPanel({
       }
       void migrateConversationTagFlags({
         conversationId,
-        currentTags: conversation.tags,
         changes,
       })
         .then(() => {
@@ -940,24 +939,15 @@ export function ConversationPanel({
   // again in one click, and nothing about the conversation itself changes.
   const handleUnarchiveProject = React.useCallback(
     (conversationId: string) => {
-      const conversation = allLoadedConversations.find(
-        (candidate) => candidate.id === conversationId,
-      );
       updateConversationTagFlags({
         conversationId,
-        currentTags: conversation?.tags,
         changes: { [ARCHIVED_CONVERSATION_TAG_KEY]: false },
       });
       // Drain any pre-migration localStorage entry for the same row so the
       // migration effect cannot resurrect the archive it just cleared.
       removeArchivedConversation(activeBackend.id, conversationId);
     },
-    [
-      activeBackend.id,
-      allLoadedConversations,
-      removeArchivedConversation,
-      updateConversationTagFlags,
-    ],
+    [activeBackend.id, removeArchivedConversation, updateConversationTagFlags],
   );
 
   // Read state for the sidebar: the open conversation is marked read, the rest
@@ -972,7 +962,6 @@ export function ConversationPanel({
     (conversation: (typeof allLoadedConversations)[number]) => {
       updateConversationTagFlags({
         conversationId: conversation.id,
-        currentTags: conversation.tags,
         changes: {
           [PINNED_CONVERSATION_TAG_KEY]: !hasConversationTagFlag(
             conversation.tags,
@@ -995,7 +984,6 @@ export function ConversationPanel({
     (conversation: (typeof allLoadedConversations)[number]) => {
       updateConversationTagFlags({
         conversationId: conversation.id,
-        currentTags: conversation.tags,
         changes: conversationUnreadTagChanges(
           !isUnreadConversationTag(conversation.tags),
         ),
@@ -1044,14 +1032,10 @@ export function ConversationPanel({
     if (!selectedConversationId) {
       return;
     }
-    const conversation = allLoadedConversations.find(
-      (candidate) => candidate.id === selectedConversationId,
-    );
     // Archiving also clears the pin: an archived row leaves the pinned
     // section together with the main list.
     updateConversationTagFlags({
       conversationId: selectedConversationId,
-      currentTags: conversation?.tags,
       changes: {
         [ARCHIVED_CONVERSATION_TAG_KEY]: true,
         [PINNED_CONVERSATION_TAG_KEY]: false,

@@ -336,7 +336,7 @@ describe("ConversationPanel conversation actions", () => {
     vi.spyOn(
       AgentServerConversationService,
       "updateConversationTagFlags",
-    ).mockImplementation(async (conversationId, _currentTags, changes) => {
+    ).mockImplementation(async (conversationId, changes) => {
       const target = items.find(
         (conversation) => conversation.id === conversationId,
       )!;
@@ -387,7 +387,7 @@ describe("ConversationPanel conversation actions", () => {
     await waitFor(() => {
       expect(
         AgentServerConversationService.updateConversationTagFlags,
-      ).toHaveBeenCalledWith("2", undefined, { pinned: true });
+      ).toHaveBeenCalledWith("2", { pinned: true });
     });
     await waitFor(() => {
       expect(
@@ -414,7 +414,7 @@ describe("ConversationPanel conversation actions", () => {
     vi.spyOn(
       AgentServerConversationService,
       "updateConversationTagFlags",
-    ).mockImplementation(async (conversationId, _currentTags, changes) => {
+    ).mockImplementation(async (conversationId, changes) => {
       const target = items.find(
         (conversation) => conversation.id === conversationId,
       )!;
@@ -427,7 +427,7 @@ describe("ConversationPanel conversation actions", () => {
     await waitFor(() => {
       expect(
         AgentServerConversationService.updateConversationTagFlags,
-      ).toHaveBeenCalledWith("1", undefined, { archived: true });
+      ).toHaveBeenCalledWith("1", { archived: true });
     });
     await waitFor(() => {
       expect(
@@ -462,11 +462,11 @@ describe("ConversationPanel conversation actions", () => {
     const write = vi
       .spyOn(AgentServerConversationService, "updateConversationTagFlags")
       .mockImplementation(
-        (_id, currentTags, changes) =>
+        (_id, changes) =>
           new Promise((resolve) => {
             finishWrite = () => {
               conversation.tags = withConversationTagFlags(
-                currentTags,
+                conversation.tags,
                 changes,
               );
               resolve(conversation);
@@ -477,14 +477,10 @@ describe("ConversationPanel conversation actions", () => {
     renderConversationPanel();
 
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-    expect(write).toHaveBeenCalledWith(
-      "1",
-      { origin: "automation" },
-      {
-        pinned: true,
-        archived: true,
-      },
-    );
+    expect(write).toHaveBeenCalledWith("1", {
+      pinned: true,
+      archived: true,
+    });
     expect(
       usePinnedConversationsStore.getState().pinsByBackendId["default-local"],
     ).toContain("1");
@@ -586,7 +582,7 @@ describe("ConversationPanel conversation actions", () => {
     vi.spyOn(
       AgentServerConversationService,
       "updateConversationTagFlags",
-    ).mockImplementation(async (conversationId, _currentTags, changes) => {
+    ).mockImplementation(async (conversationId, changes) => {
       const target = items.find(
         (conversation) => conversation.id === conversationId,
       )!;
@@ -614,7 +610,7 @@ describe("ConversationPanel conversation actions", () => {
     await waitFor(() => {
       expect(
         AgentServerConversationService.updateConversationTagFlags,
-      ).toHaveBeenCalledWith("1", { archived: "true" }, { archived: false });
+      ).toHaveBeenCalledWith("1", { archived: false });
     });
     await waitFor(() => {
       expect(
