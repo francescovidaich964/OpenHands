@@ -93,6 +93,11 @@ import {
   updateConversationLlmModelInCache,
 } from "#/hooks/mutation/conversation-mutation-utils";
 import { isPlanFilePath } from "#/utils/plan-file";
+import { useSpaceStore } from "#/stores/space-store";
+import {
+  hasSpaceContextParts,
+  stripSpaceContextParts,
+} from "#/utils/space-context";
 
 export type WebSocketConnectionState =
   | "CONNECTING"
@@ -117,6 +122,13 @@ const heldMessageText = (message: SendMessageRequest): string =>
 
 interface SendMessageResult {
   queued: boolean; // true if message was queued for later delivery, false if sent immediately
+  /**
+   * True only when the frame is still sitting in `heldMessagesRef` (a cloud
+   * sandbox that is PAUSED/STARTING has no socket to carry it yet). Callers that
+   * must know whether the message actually went out cannot read it off `queued`:
+   * that is true for a held message *and* for a successful direct POST.
+   */
+  held?: boolean;
 }
 
 interface ConversationWebSocketContextType {
@@ -1307,7 +1319,12 @@ export function ConversationWebSocketProvider({
 
   const hasSendingBubble = useCallback(
     (targetConversationId: string, message: SendMessageRequest) => {
-      const text = stripQuoteEnvelopes(heldMessageText(message)).trim();
+      // The optimistic bubble holds the user's text only: a quoted passage's
+      // envelope and a space's `<project_context>` block are sent in front of
+      // it, so both are stripped or Stop could never withdraw the message.
+      const text = stripSpaceContextParts(
+        stripQuoteEnvelopes(heldMessageText(message)),
+      ).trim();
       return useOptimisticUserMessageStore
         .getState()
         .pendingMessages.some(
@@ -1336,6 +1353,16 @@ export function ConversationWebSocketProvider({
           return;
         }
         socket.send(JSON.stringify({ ...message, run: true }));
+        // This is where a held message is really delivered, so this is where its
+        // space context counts as injected (the caller could not know yet).
+        if (
+          targetConversationId &&
+          message.content.some(
+            (part) => part.type === "text" && hasSpaceContextParts(part.text),
+          )
+        ) {
+          useSpaceStore.getState().markContextInjected(targetConversationId);
+        }
       });
     },
     [hasSendingBubble],
@@ -1478,7 +1505,7 @@ export function ConversationWebSocketProvider({
             });
             heldMessagesRef.current.set(targetConversationId, held);
           }
-          return { queued: true };
+          return { queued: true, held: true };
         }
 
         // The runtime is reachable: post the message to it directly. It is

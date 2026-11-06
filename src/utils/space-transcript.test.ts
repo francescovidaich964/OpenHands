@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { transcriptMessagesFromEvents } from "#/utils/space-transcript";
+import {
+  capTranscriptMessages,
+  transcriptMessagesFromEvents,
+} from "#/utils/space-transcript";
 import type { OpenHandsEvent } from "#/types/agent-server/core";
 
 const messageEvent = (kind: string, role: string, content: unknown) =>
@@ -51,5 +54,37 @@ describe("transcriptMessagesFromEvents", () => {
 
   it("is empty for a conversation with no messages", () => {
     expect(transcriptMessagesFromEvents([])).toEqual([]);
+  });
+});
+
+describe("capTranscriptMessages", () => {
+  const turns = (count: number, size: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      role: (index % 2 ? "Assistant" : "User") as "User" | "Assistant",
+      text: `${index}`.padEnd(size, "x"),
+    }));
+
+  it("hands a transcript that fits straight through", () => {
+    const messages = turns(4, 50);
+    expect(capTranscriptMessages(messages, 20_000)).toBe(messages);
+  });
+
+  it("keeps the head and the tail whole and the message count exact", () => {
+    const messages = turns(40, 4_000);
+    const capped = capTranscriptMessages(messages, 20_000);
+
+    // The main process stores messages.length as its incremental cursor, so a
+    // dropped message would make every later digest slice at the wrong place.
+    expect(capped).toHaveLength(messages.length);
+    expect(capped.map((message) => message.role)).toEqual(
+      messages.map((message) => message.role),
+    );
+    const total = capped.reduce((sum, message) => sum + message.text.length, 0);
+    expect(total).toBeLessThan(20_000);
+    expect(capped[0]).toEqual(messages[0]);
+    expect(capped[capped.length - 1]).toEqual(messages[messages.length - 1]);
+    // Text the summariser never sees, and never an empty entry: the main process
+    // drops those, which would change the count.
+    expect(capped[20].text).toBe("[]");
   });
 });

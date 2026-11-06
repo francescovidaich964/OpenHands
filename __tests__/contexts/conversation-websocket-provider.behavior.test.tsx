@@ -24,6 +24,7 @@ import { useGoalStore } from "#/stores/goal-store";
 import { useModelStore } from "#/stores/model-store";
 import useMetricsStore from "#/stores/metrics-store";
 import { useFilesTabStore } from "#/stores/files-tab-store";
+import { useSpaceStore } from "#/stores/space-store";
 import {
   __resetActiveStoreForTests,
   setActiveSelection,
@@ -188,6 +189,18 @@ function makeSocket(readyState: number = WebSocket.OPEN): TestSocket {
 const makeSendRequest = (text: string) => ({
   role: "user" as const,
   content: [{ type: "text" as const, text }],
+});
+
+/** As `use-send-message` sends the first message of a space member: block part, then the user's text. */
+const makeSpaceContextRequest = (text: string) => ({
+  role: "user" as const,
+  content: [
+    {
+      type: "text" as const,
+      text: '<project_context name="Release prep">\nsummaries\n<session title="Auth work" />\n</project_context>\n\n',
+    },
+    { type: "text" as const, text },
+  ],
 });
 
 function makeSubConversation(
@@ -2813,7 +2826,7 @@ describe("Conversation websocket — cloud runtime without a URL (OHE-3314)", ()
     const request = makeSendRequest("hello");
 
     await expect(contextCapture.current?.sendMessage(request)).resolves.toEqual(
-      { queued: true },
+      { queued: true, held: true },
     );
     // A second submit of the same text while still held is coalesced.
     await contextCapture.current?.sendMessage(request);
@@ -2842,7 +2855,56 @@ describe("Conversation websocket — cloud runtime without a URL (OHE-3314)", ()
 
     await expect(
       contextCapture.current?.sendMessage(makeSendRequest("hello")),
-    ).resolves.toEqual({ queued: true });
+    ).resolves.toEqual({ queued: true, held: true });
+    useOptimisticUserMessageStore.getState().removePendingMessage(pendingId);
+
+    socketCapture.mainSocket = makeSocket();
+    rerenderProvider(view, { conversationUrl: runtimeUrl });
+    await act(async () => {
+      socketCapture.mainOptions?.onOpen?.(new Event("open"));
+    });
+
+    expect(socketCapture.mainSocket?.send).not.toHaveBeenCalled();
+  });
+
+  it("marks the space context as injected only once the held message is delivered", async () => {
+    useSpaceStore.setState({ contextInjected: {} });
+    const view = renderProvider({ conversationUrl: null });
+    const request = makeSpaceContextRequest("hello");
+
+    // Held: nothing has carried the frame, so the block is not spent yet — an
+    // app restart here must be able to deliver it again.
+    await expect(contextCapture.current?.sendMessage(request)).resolves.toEqual(
+      { queued: true, held: true },
+    );
+    expect(
+      useSpaceStore.getState().contextInjected["conv-main"],
+    ).toBeUndefined();
+
+    socketCapture.mainSocket = makeSocket();
+    rerenderProvider(view, { conversationUrl: runtimeUrl, sessionApiKey: "k" });
+    await act(async () => {
+      socketCapture.mainOptions?.onOpen?.(new Event("open"));
+    });
+
+    await waitFor(() =>
+      expect(socketCapture.mainSocket?.send).toHaveBeenCalledTimes(1),
+    );
+    expect(useSpaceStore.getState().contextInjected["conv-main"]).toBe(true);
+  });
+
+  it("withdraws a held space-context message whose bubble was stopped", async () => {
+    const view = renderProvider({ conversationUrl: null });
+    // The optimistic bubble holds the user's text only; the sent message has the
+    // <project_context> part in front of it. Matching without stripping that part
+    // is what used to make Stop unable to withdraw the message.
+    const pendingId = useOptimisticUserMessageStore
+      .getState()
+      .enqueuePendingMessage({ conversationId: "conv-main", text: "hello" });
+
+    await expect(
+      contextCapture.current?.sendMessage(makeSpaceContextRequest("hello")),
+    ).resolves.toEqual({ queued: true, held: true });
     useOptimisticUserMessageStore.getState().removePendingMessage(pendingId);
 
     socketCapture.mainSocket = makeSocket();

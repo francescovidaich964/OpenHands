@@ -122,9 +122,16 @@ function runClaude({ command, args, cwd, prompt, timeoutMs, env }) {
  *   ipcMain: typeof import("electron").ipcMain,
  *   getMainWindow: () => import("electron").BrowserWindow | null,
  *   env?: NodeJS.ProcessEnv,
+ *   platform?: NodeJS.Platform,
  * }} deps
  */
-export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
+export function registerSpaceSummary({
+  app,
+  ipcMain,
+  getMainWindow,
+  env,
+  platform = process.platform,
+}) {
   const environment = env ?? process.env;
   const summaryDir = join(app.getPath("userData"), SUMMARY_DIR);
   const summarizerCwd = join(app.getPath("userData"), SUMMARIZER_CWD);
@@ -132,6 +139,65 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
   const indexFile = join(summaryDir, "index.json");
   const summaryFile = (conversationId) =>
     join(summaryDir, `${conversationId}.md`);
+
+  const readIndex = () =>
+    parseSummaryIndex(
+      existsSync(indexFile) ? readFileSync(indexFile, "utf8") : "",
+    );
+
+  /**
+   * index.json read-modify-write, one at a time (reports/R4.md S3). A digest run
+   * takes up to two minutes, so two refreshes overlap by design, and each of them
+   * rewrites the WHOLE file: writing the copy it read at the start drops the
+   * other one's entry — and a missing entry loses its claudeSessionId, so the
+   * next refresh re-summarises that conversation from scratch.
+   */
+  let indexWrites = Promise.resolve();
+  const updateIndex = (mutate) => {
+    const step = () => {
+      const next = mutate(readIndex());
+      writeFileSync(indexFile, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      return next;
+    };
+    // Chained on both branches: a failed digest must not poison later writes.
+    indexWrites = indexWrites.then(step, step);
+    return indexWrites;
+  };
+
+  /**
+   * One digest per conversation at a time (a second request joins the running
+   * one) and at most this many `claude -p` processes at once: a space with N
+   * members used to start N Opus runs in parallel.
+   */
+  const MAX_CONCURRENT_DIGESTS = 2;
+  const digestInFlight = new Map();
+  const digestQueue = [];
+  let activeDigests = 0;
+
+  const pumpDigestQueue = () => {
+    while (activeDigests < MAX_CONCURRENT_DIGESTS && digestQueue.length > 0) {
+      const { run, settle } = digestQueue.shift();
+      activeDigests += 1;
+      run().then(
+        (value) => settle({ ok: true, value }),
+        (error) => settle({ ok: false, error }),
+      );
+    }
+  };
+
+  const withDigestSlot = (run) =>
+    new Promise((resolve, reject) => {
+      digestQueue.push({
+        run,
+        settle: (outcome) => {
+          activeDigests -= 1;
+          pumpDigestQueue();
+          if (outcome.ok) resolve(outcome.value);
+          else reject(outcome.error);
+        },
+      });
+      pumpDigestQueue();
+    });
 
   const settings = () =>
     resolveSummarySettings({
@@ -163,11 +229,9 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
     });
   };
 
-  handle(CHANNEL.summarize, async (request) => {
+  const summarize = async (request) => {
+    // The channel wrapper has already checked the id and taken the slot.
     const conversationId = request?.conversationId;
-    if (!isSafeSummaryKey(conversationId)) {
-      throw new Error("Cannot summarize a conversation without an id.");
-    }
     const current = settings();
     if (!current.enabled) {
       return { ok: false, disabled: true, error: "Space summaries are off." };
@@ -176,9 +240,7 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
     mkdirSync(summarizerCwd, { recursive: true });
     mkdirSync(summaryDir, { recursive: true });
 
-    const index = parseSummaryIndex(
-      existsSync(indexFile) ? readFileSync(indexFile, "utf8") : "",
-    );
+    const index = readIndex();
     const messages = normalizeTranscriptMessages(request?.messages);
     if (messages.length === 0) {
       throw new Error(
@@ -206,6 +268,10 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
     const command = resolveClaudeCommand({
       settings: current,
       env: environment,
+      // Without this the resolver defaults to win32: it splits a POSIX PATH on
+      // ';' (one bogus directory) and probes the %APPDATA% npm layout, so on
+      // macOS/Linux no Claude Code is ever found (reports/R4.md M4).
+      platform,
       exists: (candidate) => existsSync(candidate),
     });
     if (!command.command) {
@@ -239,12 +305,15 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
     });
 
     writeFileSync(summaryFile(conversationId), result.summary, "utf8");
-    const next = upsertSummaryEntry(index, conversationId, {
-      messageCount: messages.length,
-      claudeSessionId: result.sessionId,
-      updatedMs: Date.now(),
-    });
-    writeFileSync(indexFile, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    // Read-modify-write inside the writer chain: the copy this call read at the
+    // start is two minutes stale by now.
+    const next = await updateIndex((stored) =>
+      upsertSummaryEntry(stored, conversationId, {
+        messageCount: messages.length,
+        claudeSessionId: result.sessionId,
+        updatedMs: Date.now(),
+      }),
+    );
 
     return {
       ok: true,
@@ -253,6 +322,20 @@ export function registerSpaceSummary({ app, ipcMain, getMainWindow, env }) {
       incremental,
       updatedAt: new Date(next[conversationId].updatedMs).toISOString(),
     };
+  };
+
+  handle(CHANNEL.summarize, (request) => {
+    const conversationId = request?.conversationId;
+    if (!isSafeSummaryKey(conversationId)) {
+      throw new Error("Cannot summarize a conversation without an id.");
+    }
+    const running = digestInFlight.get(conversationId);
+    if (running) return running;
+    const run = withDigestSlot(() => summarize(request)).finally(() =>
+      digestInFlight.delete(conversationId),
+    );
+    digestInFlight.set(conversationId, run);
+    return run;
   });
 
   handle(CHANNEL.read, async ({ conversationId } = {}) => {

@@ -382,6 +382,20 @@ describe("resolveClaudeCommand", () => {
       }),
     ).toEqual({ command: join("/usr/local/bin", "claude"), needsShell: false });
   });
+
+  it("finds nothing in a POSIX PATH when the caller omits the platform", () => {
+    // The default is win32: it splits this PATH on ';' (so it is one bogus
+    // directory) and probes the %APPDATA% npm layout. That is exactly what the
+    // summariser did until reports/R4.md M4 — the caller has to pass
+    // `process.platform`, which `space-summary.test.mjs` pins.
+    expect(
+      resolveClaudeCommand({
+        settings: {},
+        env: { PATH: "/nope:/usr/local/bin" },
+        exists: (candidate) => candidate === join("/usr/local/bin", "claude"),
+      }),
+    ).toEqual({ command: "", needsShell: false });
+  });
 });
 
 describe("safety predicates", () => {

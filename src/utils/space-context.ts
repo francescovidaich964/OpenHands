@@ -34,6 +34,8 @@ export interface SpaceContextBlock {
   text: string;
   /** Whole digests dropped to `<session title="…" />` to stay in budget. */
   droppedSummaryCount: number;
+  /** Members dropped entirely (their empty tag was still over budget). */
+  droppedSessionCount: number;
 }
 
 /** XML-escape an attribute/text value (Devin's `escapeXml`). */
@@ -44,6 +46,40 @@ export function escapeXml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+/**
+ * XML-escape text content: `&`, `<` and `>` only, because a text node needs no
+ * quote escaping and a digest is prose (quotes must stay readable).
+ */
+function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * Our own envelope, and only ours: the `name="` attribute is something
+ * {@link buildSpaceContextBlock} always emits, so a user who merely types
+ * `<project_context>` in their message is not mistaken for the block.
+ */
+const SPACE_CONTEXT_PART =
+  /<project_context name="[\s\S]*?<\/project_context>\n*/g;
+
+/**
+ * The block with every space envelope removed, leaving the user's own text.
+ * The held-message comparison needs this (`hasSendingBubble` in
+ * `src/contexts/conversation-websocket-context.tsx`): the optimistic bubble
+ * holds the user text only, while the sent message has the block in front of it.
+ */
+export function stripSpaceContextParts(text: string): string {
+  return text.replace(SPACE_CONTEXT_PART, "");
+}
+
+/** Whether a message carries the space block (used to mark it injected on delivery). */
+export function hasSpaceContextParts(text: string): boolean {
+  return /<project_context name="/.test(text);
 }
 
 export function truncateSummary(
@@ -57,7 +93,11 @@ export function truncateSummary(
 
 function sessionBlock(session: SpaceContextSession): string {
   const title = escapeXml(session.title);
-  const summary = truncateSummary(session.summary ?? "");
+  // Escaped as well as the title: a digest is model output over an untrusted
+  // transcript, and an unescaped `</project_context>` in it would close the
+  // envelope inside every OTHER member's first message (cross-conversation
+  // prompt injection with this app's own credibility).
+  const summary = escapeXmlText(truncateSummary(session.summary ?? ""));
   return summary
     ? `<session title="${title}">\n${summary}\n</session>`
     : `<session title="${title}" />`;
@@ -67,7 +107,10 @@ function sessionBlock(session: SpaceContextSession): string {
  * Builds Devin's block for `sessions` (the space's members, current
  * conversation already excluded, oldest first). When the whole block is over
  * budget, the oldest digests are dropped to empty `<session title="…" />` tags
- * — the agent still learns the shape of the group.
+ * — the agent still learns the shape of the group — and if even that is over
+ * budget, the oldest sessions are dropped whole. The result is never over
+ * budget: when only the envelope itself is left and that still does not fit,
+ * the block is empty and the caller sends no context at all.
  */
 export function buildSpaceContextBlock(
   spaceTitle: string,
@@ -81,14 +124,28 @@ export function buildSpaceContextBlock(
     )}\n</project_context>\n\n`;
 
   let droppedSummaryCount = 0;
+  let droppedSessionCount = 0;
+
+  // Phase 1: the oldest digests become empty tags, oldest first.
   for (let index = 0; index < blocks.length; index += 1) {
     if (wrap(blocks).length <= limit) break;
-    if (blocks[index] === sessionBlock({ title: sessions[index].title })) {
-      continue; // already empty — nothing left to drop here
-    }
-    blocks[index] = sessionBlock({ title: sessions[index].title });
+    const empty = sessionBlock({ title: sessions[index].title });
+    if (blocks[index] === empty) continue; // no digest to drop here
+    blocks[index] = empty;
     droppedSummaryCount += 1;
   }
+  // Phase 2: whole members go, oldest first. A budget that can still be blown
+  // is not a budget.
+  while (blocks.length > 0 && wrap(blocks).length > limit) {
+    blocks.shift();
+    droppedSessionCount += 1;
+  }
 
-  return { text: wrap(blocks), droppedSummaryCount };
+  const text = wrap(blocks);
+  return {
+    // Not even the envelope fits: send no context rather than an over-budget one.
+    text: text.length > limit ? "" : text,
+    droppedSummaryCount,
+    droppedSessionCount,
+  };
 }

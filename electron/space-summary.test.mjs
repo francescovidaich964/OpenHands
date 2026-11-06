@@ -27,6 +27,7 @@ const USER_DATA = "C:\\UserData";
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const OTHER_SESSION = "22222222-2222-3333-4444-555555555555";
 const CONVERSATION = "11111111-aaaa-bbbb-cccc-dddddddddddd";
+const OTHER_CONVERSATION = "22222222-aaaa-bbbb-cccc-dddddddddddd";
 
 const SUMMARY_MD = join(USER_DATA, "space_summaries", `${CONVERSATION}.md`);
 const INDEX_JSON = join(USER_DATA, "space_summaries", "index.json");
@@ -51,16 +52,42 @@ function windowFor(event) {
 }
 
 /** Registers the module against a fake ipcMain and returns its handlers. */
-function register({ env = {}, window = null } = {}) {
+function register({ env = {}, window = null, platform } = {}) {
   const handlers = new Map();
   const api = registerSpaceSummary({
     app: { getPath: () => USER_DATA },
     ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) },
     getMainWindow: () => window,
     env: { AGENT_CANVAS_CLAUDE_COMMAND: "C:\\claude.exe", ...env },
+    ...(platform ? { platform } : {}),
   });
   return { api, handlers };
 }
+
+/** A `claude -p` child that stays running until the test says `finish()`. */
+function pendingChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => {};
+  child.kill = () => {};
+  child.finish = (result, session_id = SESSION) => {
+    child.stdout.emit(
+      "data",
+      Buffer.from(JSON.stringify(okResult(result, session_id))),
+    );
+    child.emit("close", 0);
+  };
+  return child;
+}
+
+/** Lets the module's promise queue run between assertions. */
+const tick = async () => {
+  for (let index = 0; index < 10; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
 
 /** A `claude -p` child that answers with `payload` (or garbage). */
 function answerWith(payload, { code = 0, raw } = {}) {
@@ -341,5 +368,100 @@ describe("space-summary IPC", () => {
       messageCount: 2,
       updatedAt: new Date(1_700_000_000_000).toISOString(),
     });
+  });
+
+  it("finds Claude Code on a POSIX PATH (the platform is not assumed)", async () => {
+    const event = trustedEvent();
+    const { handlers } = register({
+      window: windowFor(event),
+      env: { AGENT_CANVAS_CLAUDE_COMMAND: "", PATH: "/nope:/usr/local/bin" },
+      platform: "linux",
+    });
+    files.set(join("/usr/local/bin", "claude"), "");
+    answerWith(okResult("digest"));
+
+    const result = await callSummarize(handlers, event, {
+      conversationId: CONVERSATION,
+      messages: messages("a", "b"),
+    });
+
+    // Without the platform the resolver defaults to win32: it splits this PATH on
+    // ';' (one bogus directory) and probes the %APPDATA% npm layout, so no
+    // Claude is ever found on macOS/Linux (reports/R4.md M4).
+    expect(result.ok).toBe(true);
+    expect(spawn.mock.calls[0][0]).toBe(join("/usr/local/bin", "claude"));
+  });
+
+  it("keeps other conversations' index entries when digests overlap", async () => {
+    const event = trustedEvent();
+    const { handlers } = register({ window: windowFor(event) });
+    spawn.mockImplementation(() => {
+      const child = pendingChild();
+      setImmediate(() => child.finish("digest"));
+      return child;
+    });
+
+    await Promise.all([
+      callSummarize(handlers, event, {
+        conversationId: CONVERSATION,
+        messages: messages("a", "b"),
+      }),
+      callSummarize(handlers, event, {
+        conversationId: OTHER_CONVERSATION,
+        messages: messages("c", "d"),
+      }),
+    ]);
+
+    // Both read the index at the start; each used to rewrite the whole file from
+    // that stale copy, so the later one dropped the other's entry (R4.md S3) —
+    // and a dropped entry loses its claudeSessionId.
+    const index = JSON.parse(files.get(INDEX_JSON));
+    expect(Object.keys(index).sort()).toEqual(
+      [CONVERSATION, OTHER_CONVERSATION].sort(),
+    );
+  });
+
+  it("runs one digest per conversation and at most two at a time", async () => {
+    const event = trustedEvent();
+    const { handlers } = register({ window: windowFor(event) });
+    const children = [];
+    spawn.mockImplementation(() => {
+      const child = pendingChild();
+      children.push(child);
+      return child;
+    });
+
+    const third = "33333333-aaaa-bbbb-cccc-dddddddddddd";
+    const calls = [CONVERSATION, OTHER_CONVERSATION, third].map((id) =>
+      callSummarize(handlers, event, {
+        conversationId: id,
+        messages: messages("a", "b"),
+      }),
+    );
+    // Same conversation again while its digest is still running.
+    const joined = callSummarize(handlers, event, {
+      conversationId: CONVERSATION,
+      messages: messages("a", "b"),
+    });
+
+    await tick();
+    expect(children).toHaveLength(2); // the third waits for a slot
+
+    children[0].finish("first");
+    await tick();
+    expect(children).toHaveLength(3); // the freed slot takes it
+
+    children[1].finish("second");
+    children[2].finish("third");
+    const results = await Promise.all([...calls, joined]);
+
+    expect(results.map((result) => result.ok)).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(results[3].summary).toBe("first"); // it joined the running digest
+    expect(children).toHaveLength(3); // 4 requests, 3 conversations, 3 processes
   });
 });
