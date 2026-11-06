@@ -84,6 +84,15 @@ interface ConversationCardProps {
   onTogglePin?: () => void;
   /** When true and pinned, keep the pin icon visible without hovering. */
   alwaysShowPinIcon?: boolean;
+  /** Shows the unread marker next to the title (see `conversation-read-state.ts`). */
+  isUnread?: boolean;
+  /**
+   * Toggles the manual unread marker. The card offers "Mark as unread" while
+   * read and "Mark as read" once the marker is set, so exactly one of the two
+   * is passed, the same way archive and unarchive are.
+   */
+  onMarkUnread?: () => void;
+  onMarkRead?: () => void;
 }
 
 export function ConversationCard({
@@ -122,6 +131,9 @@ export function ConversationCard({
   isPinned = false,
   onTogglePin,
   alwaysShowPinIcon = false,
+  isUnread = false,
+  onMarkUnread,
+  onMarkRead,
 }: ConversationCardProps) {
   const { t } = useTranslation("openhands");
   const { trackDownloadVsCodeButtonClicked } = useTracking();
@@ -192,6 +204,20 @@ export function ConversationCard({
     event.preventDefault();
     event.stopPropagation();
     onEditTags?.();
+    onContextMenuToggle?.(false);
+  };
+
+  const handleMarkUnread = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onMarkUnread?.();
+    onContextMenuToggle?.(false);
+  };
+
+  const handleMarkRead = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onMarkRead?.();
     onContextMenuToggle?.(false);
   };
 
@@ -277,6 +303,8 @@ export function ConversationCard({
     onUnarchive ||
     onChangeTitle ||
     onEditTags ||
+    onMarkUnread ||
+    onMarkRead ||
     showOptions
   );
   const hasHoverActions = hasContextMenu || !!onTogglePin;
@@ -310,6 +338,7 @@ export function ConversationCard({
             isStarting={isStarting}
             sandboxStatus={sandboxStatus}
             isArchived={effectiveArchived}
+            isUnread={isUnread}
           />
           {sandboxStatus === "ERROR" && !effectiveArchived && (
             <ConversationStatusBadges />
@@ -373,6 +402,8 @@ export function ConversationCard({
                       }
                       onEdit={onChangeTitle && handleEdit}
                       onEditTags={onEditTags && handleEditTags}
+                      onMarkUnread={onMarkUnread && handleMarkUnread}
+                      onMarkRead={onMarkRead && handleMarkRead}
                       onDownloadViaVSCode={handleDownloadViaVSCode}
                       onDownloadConversation={handleDownloadConversation}
                       executionStatus={executionStatus}
@@ -407,6 +438,8 @@ export function ConversationCard({
                   }
                   onEdit={onChangeTitle && handleEdit}
                   onEditTags={onEditTags && handleEditTags}
+                  onMarkUnread={onMarkUnread && handleMarkUnread}
+                  onMarkRead={onMarkRead && handleMarkRead}
                   onDownloadViaVSCode={handleDownloadViaVSCode}
                   onDownloadConversation={handleDownloadConversation}
                   executionStatus={executionStatus}

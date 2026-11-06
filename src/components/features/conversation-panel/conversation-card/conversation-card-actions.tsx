@@ -21,6 +21,8 @@ interface ConversationCardActionsProps {
   ) => void;
   onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onEditTags?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onMarkUnread?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onMarkRead?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDownloadViaVSCode?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDownloadConversation?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   executionStatus?: ExecutionStatus | null;
@@ -38,6 +40,8 @@ export function ConversationCardActions({
   onNewConversationInSandbox,
   onEdit,
   onEditTags,
+  onMarkUnread,
+  onMarkRead,
   onDownloadViaVSCode,
   onDownloadConversation,
   executionStatus,
@@ -132,6 +136,8 @@ export function ConversationCardActions({
               onNewConversationInSandbox={onNewConversationInSandbox}
               onEdit={onEdit}
               onEditTags={onEditTags}
+              onMarkUnread={onMarkUnread}
+              onMarkRead={onMarkRead}
               onDownloadViaVSCode={
                 conversationId && showOptions ? onDownloadViaVSCode : undefined
               }

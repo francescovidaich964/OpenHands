@@ -39,6 +39,8 @@ interface ConversationPanelRowProps {
   handleEditTags: (id: string) => void;
   handleConversationTitleChange: (id: string, title: string) => void;
   handleTogglePin: (conversation: AppConversation) => void;
+  isUnread: boolean;
+  handleToggleUnread: (conversation: AppConversation) => void;
   setOpenContextMenuId: (id: string | null) => void;
 }
 
@@ -70,6 +72,8 @@ export const ConversationPanelRow = React.memo(function ConversationPanelRow({
   handleEditTags,
   handleConversationTitleChange,
   handleTogglePin,
+  isUnread,
+  handleToggleUnread,
   setOpenContextMenuId,
 }: ConversationPanelRowProps) {
   const runtimeMissing = isMissingSandboxStatus(conversation.sandbox_status);
@@ -159,6 +163,17 @@ export const ConversationPanelRow = React.memo(function ConversationPanelRow({
           onEditTags={
             allowEditTags ? () => handleEditTags(conversation.id) : undefined
           }
+          // The open row is not offered "Mark as unread": opening a conversation
+          // is what marks it read, so the panel would clear that tag straight
+          // away. Devin gates the item the same way.
+          onMarkUnread={
+            isUnread || isActive
+              ? undefined
+              : () => handleToggleUnread(conversation)
+          }
+          onMarkRead={
+            isUnread ? () => handleToggleUnread(conversation) : undefined
+          }
           onChangeTitle={(title) =>
             handleConversationTitleChange(conversation.id, title)
           }
@@ -180,6 +195,7 @@ export const ConversationPanelRow = React.memo(function ConversationPanelRow({
             setOpenContextMenuId(isOpen ? conversation.id : null)
           }
           isActive={isActive}
+          isUnread={isUnread}
           workspaceWorkingDir={
             conversation.selected_workspace ??
             conversation.workspace?.working_dir

@@ -72,6 +72,12 @@ import {
   hasConversationTagFlag,
   PINNED_CONVERSATION_TAG_KEY,
 } from "#/utils/conversation-tag-flags";
+import {
+  conversationUnreadTagChanges,
+  isConversationUnread,
+  isUnreadConversationTag,
+} from "#/utils/conversation-read-state";
+import { useConversationReadState } from "#/hooks/use-conversation-read-state";
 import { uniqueById } from "#/utils/unique-by-id";
 import { isEffectivelyArchivedConversation } from "#/utils/conversation-archive-status";
 import type { SandboxStatus } from "#/api/conversation-service/agent-server-conversation-service.types";
@@ -952,6 +958,14 @@ export function ConversationPanel({
     ],
   );
 
+  // Read state for the sidebar: the open conversation is marked read, the rest
+  // carry their last-viewed marker (see `conversation-read-state.ts`).
+  const viewedAtByConversationId = useConversationReadState({
+    backendId: activeBackend.id,
+    conversations: allLoadedConversations,
+    conversationId: currentConversationId,
+  });
+
   const handleTogglePin = React.useCallback(
     (conversation: (typeof allLoadedConversations)[number]) => {
       updateConversationTagFlags({
@@ -969,6 +983,23 @@ export function ConversationPanel({
       unpinConversation(activeBackend.id, conversation.id);
     },
     [activeBackend.id, unpinConversation, updateConversationTagFlags],
+  );
+
+  // The manual "come back to this later" marker. It rides the same server-side
+  // tag mutation as pin and archive, so it survives a different device and works
+  // for local ACP conversations, which have no cloud record to flag. Opening the
+  // conversation clears it again, which is why the open row hides the action.
+  const handleToggleUnread = React.useCallback(
+    (conversation: (typeof allLoadedConversations)[number]) => {
+      updateConversationTagFlags({
+        conversationId: conversation.id,
+        currentTags: conversation.tags,
+        changes: conversationUnreadTagChanges(
+          !isUnreadConversationTag(conversation.tags),
+        ),
+      });
+    },
+    [updateConversationTagFlags],
   );
 
   const handleStopConversation = React.useCallback((conversationId: string) => {
@@ -1094,6 +1125,16 @@ export function ConversationPanel({
       // runtime cannot be restored from this menu, so such a row offers neither
       // "Archive" nor "Unarchive", even when a stored archive flag is set.
       const explicitlyArchived = archivedIdSet.has(conversation.id);
+      // Read state: the row you are looking at is never unread (opening it is
+      // what marks it read), everything else is unread when its finished output
+      // is newer than the last time this device had it open.
+      const isRowActive = conversation.id === currentConversationId;
+      const isUnread =
+        !isRowActive &&
+        isConversationUnread(
+          conversation,
+          viewedAtByConversationId.get(conversation.id) ?? null,
+        );
       // "New Conversation in Sandbox" needs a sandbox the backend can start a
       // conversation in: Cloud rows only (the local adapter carries no sandbox
       // id), and not one whose runtime is MISSING or ERROR, which the start
@@ -1142,8 +1183,9 @@ export function ConversationPanel({
             conversation.updated_at ?? conversation.created_at,
           )}
           href={backendScopedPath(`/conversations/${conversation.id}`)}
-          isActive={conversation.id === currentConversationId}
+          isActive={isRowActive}
           isPinned={isPinned}
+          isUnread={isUnread}
           isArchived={isArchived}
           explicitlyArchived={explicitlyArchived}
           contextMenuOpen={openContextMenuId === conversation.id}
@@ -1170,6 +1212,7 @@ export function ConversationPanel({
           handleEditTags={handleEditTags}
           handleConversationTitleChange={handleConversationTitleChange}
           handleTogglePin={handleTogglePin}
+          handleToggleUnread={handleToggleUnread}
           setOpenContextMenuId={setOpenContextMenuId}
         />
       );
@@ -1192,6 +1235,7 @@ export function ConversationPanel({
       handleNewConversationInSandbox,
       handleStopConversation,
       handleTogglePin,
+      handleToggleUnread,
       handleUnarchiveProject,
       isRowArchived,
       onClose,
@@ -1201,6 +1245,7 @@ export function ConversationPanel({
       showLlmProfiles,
       showTagsMetadata,
       showHoverMetadata,
+      viewedAtByConversationId,
     ],
   );
 

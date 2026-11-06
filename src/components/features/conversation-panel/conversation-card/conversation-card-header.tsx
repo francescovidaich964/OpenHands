@@ -1,5 +1,7 @@
+import { useTranslation } from "react-i18next";
 import { ExecutionStatus } from "#/types/agent-server/core/base/common";
 import { SandboxStatus } from "#/api/conversation-service/agent-server-conversation-service.types";
+import { I18nKey } from "#/i18n/declaration";
 import { isMissingSandboxStatus } from "#/utils/conversation-archive-status";
 import { ConversationCardTitle } from "./conversation-card-title";
 import { ConversationStatusDot } from "../conversation-status-dot";
@@ -19,6 +21,12 @@ interface ConversationCardHeaderProps {
    * sandbox status.
    */
   isArchived?: boolean;
+  /**
+   * Marks a conversation with agent output the user has not opened yet. Its own
+   * channel: it sits next to the title, never replacing the execution-status
+   * dot, so "running" and "unread" can show at the same time.
+   */
+  isUnread?: boolean;
 }
 
 export function ConversationCardHeader({
@@ -30,7 +38,9 @@ export function ConversationCardHeader({
   isStarting,
   sandboxStatus,
   isArchived,
+  isUnread,
 }: ConversationCardHeaderProps) {
+  const { t } = useTranslation("openhands");
   const archived = isArchived ?? isMissingSandboxStatus(sandboxStatus);
   return (
     <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
@@ -52,6 +62,14 @@ export function ConversationCardHeader({
         onSave={onTitleSave}
         isConversationArchived={archived}
       />
+      {isUnread && (
+        <span
+          data-testid="conversation-unread-dot"
+          role="img"
+          aria-label={t(I18nKey.CONVERSATION$UNREAD)}
+          className="size-1.5 shrink-0 rounded-full bg-accent"
+        />
+      )}
     </div>
   );
 }

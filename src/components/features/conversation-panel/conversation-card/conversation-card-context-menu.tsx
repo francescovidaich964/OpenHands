@@ -7,7 +7,15 @@ import { ContextMenuListItem } from "../../context-menu/context-menu-list-item";
 import { I18nKey } from "#/i18n/declaration";
 import { ConversationNameContextMenuIconText } from "../../conversation/conversation-name-context-menu-icon-text";
 
-import { Archive, ArchiveRestore, Gauge, SquarePlus, Tags } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  CheckCheck,
+  CircleDot,
+  Gauge,
+  SquarePlus,
+  Tags,
+} from "lucide-react";
 import EditIcon from "#/icons/u-edit.svg?react";
 import SkillsIcon from "#/icons/skills.svg?react";
 import ToolsIcon from "#/icons/u-tools.svg?react";
@@ -27,6 +35,13 @@ interface ConversationCardContextMenuProps {
   ) => void;
   onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onEditTags?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  /**
+   * Manual read-state toggle. The panel passes exactly one of the two, the way
+   * it passes archive or unarchive, so the menu always reads as the action that
+   * will happen.
+   */
+  onMarkUnread?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onMarkRead?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDisplayCost?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onShowAgentTools?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onShowSkills?: (event: React.MouseEvent<HTMLButtonElement>) => void;
@@ -50,6 +65,8 @@ export function ConversationCardContextMenu({
   onNewConversationInSandbox,
   onEdit,
   onEditTags,
+  onMarkUnread,
+  onMarkRead,
   onDisplayCost,
   onShowAgentTools,
   onShowSkills,
@@ -226,6 +243,36 @@ export function ConversationCardContextMenu({
         ],
         // eslint-disable-next-line i18next/no-literal-string -- internal section id, not user-facing
         "control-section",
+      )}
+      {generateSection(
+        [
+          onMarkUnread && (
+            <ContextMenuListItem
+              key="mark-unread-button"
+              testId="mark-unread-button"
+              onClick={onMarkUnread}
+            >
+              <ConversationNameContextMenuIconText
+                icon={<CircleDot className="h-4 w-4" aria-hidden />}
+                text={t(I18nKey.CONVERSATION$MARK_UNREAD)}
+              />
+            </ContextMenuListItem>
+          ),
+          onMarkRead && (
+            <ContextMenuListItem
+              key="mark-read-button"
+              testId="mark-read-button"
+              onClick={onMarkRead}
+            >
+              <ConversationNameContextMenuIconText
+                icon={<CheckCheck className="h-4 w-4" aria-hidden />}
+                text={t(I18nKey.CONVERSATION$MARK_READ)}
+              />
+            </ContextMenuListItem>
+          ),
+        ],
+        // eslint-disable-next-line i18next/no-literal-string -- internal section id, not user-facing
+        "read-section",
       )}
       {generateSection(
         [
