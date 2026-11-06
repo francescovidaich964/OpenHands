@@ -38,6 +38,12 @@ export interface PendingUserMessage {
    * primary key when matching against the echoed `UserMessageEvent`.
    */
   content: string;
+  /**
+   * Text parts sent ahead of `content` (the passage-quote envelope). Held here
+   * so a retry rebuilds the same wire shape; `content` alone cannot, because the
+   * envelope is stripped out of it for echo matching.
+   */
+  extraTextParts?: string[];
   status: PendingUserMessageStatus;
   imageUrls: string[];
   fileUrls: string[];
@@ -60,6 +66,8 @@ export interface EnqueuePendingMessagePayload {
    * that don't transform the content (e.g. git-control-bar, task-card).
    */
   content?: string;
+  /** Extra text parts sent ahead of `content`; see `PendingUserMessage`. */
+  extraTextParts?: string[];
   imageUrls?: string[];
   fileUrls?: string[];
   timestamp?: string;
@@ -164,6 +172,7 @@ export const useOptimisticUserMessageStore = create<OptimisticUserMessageStore>(
         conversationId: payload.conversationId,
         text: payload.text,
         content: payload.content ?? payload.text,
+        extraTextParts: payload.extraTextParts ?? [],
         status: "sending",
         imageUrls: payload.imageUrls ?? [],
         fileUrls: payload.fileUrls ?? [],

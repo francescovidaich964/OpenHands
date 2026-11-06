@@ -21,7 +21,11 @@ import {
   usePendingQuoteStore,
   readStagedQuote,
 } from "#/stores/pending-quote-store";
-import { buildQuoteEnvelope, stripQuoteEnvelopes } from "#/utils/message-quote";
+import {
+  buildQuoteEnvelope,
+  isBuiltInSlashCommand,
+  stripQuoteEnvelopes,
+} from "#/utils/message-quote";
 import { useMessageSelection } from "#/hooks/use-message-selection";
 import { QuoteSelectionPopup } from "#/components/features/chat/quote-selection-popup";
 import { BtwMessages } from "./btw-messages";
@@ -522,11 +526,16 @@ export function ChatInterface({
     // Devin's shape: the quote is its own text part on the wire and the composer
     // text stays the first part. A quote sent straight from the popup arrives as
     // `quoteEnvelope`; a quote staged in the composer rides along with the send.
+    // A built-in slash command is matched verbatim downstream, so it goes out bare
+    // and the staged quote survives for the user's next real message — the same
+    // rule the reply-quote path applies in use-chat-submission.
+    const isCommand = isBuiltInSlashCommand(content);
     const staged = conversationId ? readStagedQuote(conversationId) : null;
-    const envelope =
-      quoteEnvelope ?? (staged ? buildQuoteEnvelope(staged) : null);
+    const envelope = isCommand
+      ? null
+      : (quoteEnvelope ?? (staged ? buildQuoteEnvelope(staged) : null));
     const extra = envelope ? [envelope] : [];
-    if (!quoteEnvelope && staged && conversationId)
+    if (!isCommand && !quoteEnvelope && staged && conversationId)
       usePendingQuoteStore.getState().discard(conversationId);
 
     // Enqueue the message into the local pending queue with status "sending"
@@ -542,6 +551,9 @@ export function ChatInterface({
       // against. They're different when there are file attachments.
       text: envelope ? `${content.trimEnd()}\n\n${envelope}` : content,
       content: stripQuoteEnvelopes(`${prompt}${envelope ?? ""}`),
+      // Retry has to rebuild the same wire shape, and the quote is not in
+      // `content` (it is stripped above) — so the parts travel with the entry.
+      extraTextParts: extra,
       imageUrls,
       fileUrls: uploadedFiles,
       timestamp,
@@ -732,12 +744,21 @@ export function ChatInterface({
 
   const sendFromPopup = (caption: string) => {
     if (!popupQuote) return closeQuotePopup();
+    const trimmed = caption.trim();
+    if (isBuiltInSlashCommand(trimmed)) {
+      // This Send button bypasses the composer's command interceptors, and a
+      // built-in command goes out bare: stage the selection instead of wrapping
+      // the command in an envelope, so the quote is spent on the next message.
+      stageFromPopup(trimmed);
+      void handleSendMessage(trimmed, [], []);
+      return;
+    }
     const envelopeText = buildQuoteEnvelope({
       ...popupQuote,
-      caption: caption.trim(),
+      caption: trimmed,
     });
     closeQuotePopup();
-    void handleSendMessage(caption.trim(), [], [], envelopeText);
+    void handleSendMessage(trimmed, [], [], envelopeText);
   };
 
   return (

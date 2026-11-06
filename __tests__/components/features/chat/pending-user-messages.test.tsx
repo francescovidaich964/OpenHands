@@ -312,6 +312,37 @@ describe("PendingUserMessages", () => {
     );
   });
 
+  it("retry replays the passage-quote parts that rode alongside the text", async () => {
+    mockSend.mockResolvedValueOnce({ queued: false });
+    const envelope =
+      '<quoted_artifact kind="message" source="agent" truncated="false">the passage</quoted_artifact>';
+    const id = useOptimisticUserMessageStore.getState().enqueuePendingMessage({
+      conversationId: ACTIVE_CONVO,
+      text: `look at this\n\n${envelope}`,
+      // The send path strips the envelope out of `content` (echo matching) and
+      // hands it over as a separate part, so the entry has to keep it.
+      content: "look at this",
+      extraTextParts: [envelope],
+    });
+    useOptimisticUserMessageStore
+      .getState()
+      .markPendingMessageError(id, "Server unavailable");
+
+    renderWithProviders(<PendingUserMessages />);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("chat-message-retry"));
+
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          content: "look at this",
+          extra_text_parts: [envelope],
+        }),
+      }),
+    );
+  });
+
   it("flips back to 'error' if the retry attempt also fails", async () => {
     mockSend.mockRejectedValueOnce(new Error("still broken"));
     const id = useOptimisticUserMessageStore.getState().enqueuePendingMessage({
