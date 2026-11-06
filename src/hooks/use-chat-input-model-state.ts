@@ -19,6 +19,10 @@ import {
   resolveEffectiveAcpModel,
   type ACPModelOption,
 } from "#/constants/acp-providers";
+import {
+  getAcpEffortLevels,
+  splitAcpModelEffort,
+} from "#/constants/acp-effort";
 import { I18nKey } from "#/i18n/declaration";
 
 export interface ChatInputModelState {
@@ -27,6 +31,14 @@ export interface ChatInputModelState {
   currentModelId: string | null;
   /** The saved choice the picker marks; null is the agent's own default. */
   selectedModelId: string | null;
+  /** {@link selectedModelId} without its effort suffix (same null). */
+  selectedModelBase: string | null;
+  /** Effort of {@link selectedModelId}, or null for the agent's own default. */
+  selectedEffort: string | null;
+  /** Effort levels the provider offers; empty when it has no effort option. */
+  effortLevels: readonly string[];
+  /** Whether the effort rows belong in the menu. */
+  showEffortPicker: boolean;
   availableAcpModels: ACPModelOption[];
   /** The picker's Agent default row, or null when it isn't offered. */
   agentDefaultLabel: string | null;
@@ -118,12 +130,29 @@ export function useChatInputModelState(): ChatInputModelState {
     currentModelId = conversation?.llm_model ?? settings?.llm_model ?? null;
   }
 
+  // Effort rides on the saved choice, so it splits off selectedModelId; the
+  // label follows currentModelId, which is the agent's own default while no
+  // model is saved. Every other ACP branch has the two ids equal.
+  const effortLevels = isAcpContext ? getAcpEffortLevels(acpServerKey) : [];
+  const selected = splitAcpModelEffort(selectedModelId, effortLevels);
+  // "" means no saved model, which is the picker's Agent-default row.
+  const selectedModelBase = selected.model || null;
+  const selectedEffort = selected.effort;
+  const displayedModel = isAcpContext
+    ? splitAcpModelEffort(currentModelId, effortLevels).model
+    : currentModelId;
+
   let displayModel = currentModelId;
   if (isAcpContext) {
     displayModel =
-      labelForAcpModel(currentModelId, liveModels) ??
+      labelForAcpModel(displayedModel, liveModels) ??
       // The next conversation starts on a default no one has reported yet.
       (isHomeAcp ? t(I18nKey.SETTINGS$AGENT_MODEL_AGENT_DEFAULT) : null);
+    if (displayModel && selectedEffort) {
+      // The level token is the agent's own option value: shown verbatim, never
+      // translated, so the chip reads exactly what gets sent.
+      displayModel = `${displayModel} · ${selectedEffort}`;
+    }
   }
   const availableAcpModels = isAcpContext ? liveModels : [];
   // A home-page pick persists into the active ACP profile, which on cloud is
@@ -133,6 +162,11 @@ export function useChatInputModelState(): ChatInputModelState {
     !isHomeAcp || backend.kind !== "cloud" || canManageOrgProfiles;
   const showAcpPicker =
     isAcpContext && availableAcpModels.length > 0 && canPersistHomeAcpModel;
+  // Effort is a property of a chosen model: while the agent's own default is in
+  // force there is no id to suffix, so there is nothing to pick. It shares the
+  // model rows' permission gate because it is written by the same call.
+  const showEffortPicker =
+    showAcpPicker && effortLevels.length > 0 && selectedModelBase !== null;
   let agentDefaultLabel: string | null = null;
   if (isHomeAcp && acpProvider && !getAcpPreferredDefaultModel(acpServerKey)) {
     const defaultModelLabel = labelForAcpModel(
@@ -154,6 +188,10 @@ export function useChatInputModelState(): ChatInputModelState {
     displayModel,
     currentModelId,
     selectedModelId,
+    selectedModelBase,
+    selectedEffort,
+    effortLevels,
+    showEffortPicker,
     availableAcpModels,
     agentDefaultLabel,
     showAcpPicker,
