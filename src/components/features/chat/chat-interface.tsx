@@ -47,6 +47,7 @@ import { SERVER_CONNECTION_ERROR_MESSAGE } from "#/constants/server-connection-e
 import { ErrorMessageBanner } from "./error-message-banner";
 import { ConnectionRecoveryNotice } from "./connection-recovery-notice";
 import { SkillInstallRestartBanner } from "./skill-install-restart-banner";
+import { SpaceContextChip } from "./space-context-chip";
 import { LlmNotConfiguredBanner } from "#/components/features/home/llm-not-configured-banner";
 import { useLlmConfigured } from "#/hooks/use-llm-configured";
 import { Messages } from "#/components/conversation-events/chat/messages";
@@ -771,6 +772,8 @@ export function ChatInterface({
 
           <div className={CHAT_COMPOSER_CLASS_NAME}>
             <SkillInstallRestartBanner conversationId={conversationId} />
+            {/* Fork feature: what this conversation's first message carries from its space. */}
+            <SpaceContextChip conversationId={conversationId} />
             <BtwMessages conversationId={conversationId} />
             {recoveryAgentState === AgentState.RUNNING &&
               !errorMessage &&

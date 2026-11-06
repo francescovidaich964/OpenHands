@@ -45,6 +45,7 @@ import { ConversationLayoutsMenu } from "./conversation-layouts-menu";
 import { ConversationActiveTagFilters } from "./conversation-active-tag-filters";
 import { ConversationPanelNewThreadPicker } from "./conversation-panel-new-thread-picker";
 import { ConversationGroupFolderList } from "./conversation-group-folder-list";
+import { SpaceFolderList } from "./space-folder-list";
 import { ConversationPanelPinnedSection } from "./conversation-panel-pinned-section";
 import {
   applyAutomationConversationFilter,
@@ -1489,6 +1490,18 @@ export function ConversationPanel({
               renderConversationCard(conversation),
             )
           : null}
+
+        {/* Fork feature: user-created Spaces, shown above the derived
+            workspace/repository folders (see space-folder-list.tsx). */}
+        {!showInitialSkeleton && !compact ? (
+          <SpaceFolderList
+            conversations={allLoadedConversations}
+            renderConversationCard={(conversation) =>
+              renderConversationCard(conversation)
+            }
+            isCreatingConversationFlow={isCreatingConversationFlow}
+          />
+        ) : null}
 
         {!showInitialSkeleton &&
         !compact &&
