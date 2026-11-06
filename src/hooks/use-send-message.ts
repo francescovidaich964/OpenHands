@@ -2,6 +2,8 @@ import { useCallback } from "react";
 import { useConversationWebSocket } from "#/contexts/conversation-websocket-context";
 import { useOptionalConversationId } from "#/hooks/use-conversation-id";
 import { MessageContent } from "#/api/conversation-service/agent-server-conversation-service.types";
+import { spaceContextForFirstMessage } from "#/utils/space-send-context";
+import { useSpaceStore } from "#/stores/space-store";
 
 interface SendResult {
   queued: boolean; // true if message was queued for later delivery
@@ -57,11 +59,24 @@ export function useSendMessage() {
             });
           }
 
+          // Fork feature (Spaces, Devin parity): the FIRST user message of a
+          // conversation that belongs to a space carries the space's other
+          // summaries as their own text part, in front of the user's text.
+          const spaceContext = spaceContextForFirstMessage(conversationId);
+          if (spaceContext) {
+            content.unshift({ type: "text", text: spaceContext.text });
+          }
+
           // Send via WebSocket context (uses correct host/port)
           const result = await conversationContext.sendMessage({
             role: "user",
             content,
           });
+          if (spaceContext && conversationId) {
+            // Only once it is really sent, so a failed send can still deliver
+            // the context on the retry.
+            useSpaceStore.getState().markContextInjected(conversationId);
+          }
           return result;
         }
         return { queued: false };

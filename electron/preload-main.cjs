@@ -131,3 +131,23 @@ contextBridge.exposeInMainWorld("agentCanvasSelfUpdate", {
   /** One guarded `--force-with-lease` push to the fork. */
   syncPush: () => ipcRenderer.invoke("sync:push"),
 });
+
+// Fork-only Spaces summariser (see electron/space-summary.mjs). The renderer
+// sends a conversation id plus a formatted transcript and nothing else: the
+// model and the on/off switch are the main process' own settings, and Claude
+// Code authenticates with the user's existing login.
+contextBridge.exposeInMainWorld("agentCanvasSpaces", {
+  /**
+   * `{ conversationId, transcript, messageCount }` ->
+   * `{ ok, summary, messageCount } | { ok: false, error }`.
+   */
+  summarize: (request) => ipcRenderer.invoke("space-summary:summarize", request),
+  /** `{ conversationId }` -> the digest stored on disk, if any. */
+  read: (request) => ipcRenderer.invoke("space-summary:read", request),
+  /** Every digest + cursor on disk, for one cheap hydrate at startup. */
+  list: () => ipcRenderer.invoke("space-summary:list"),
+  /** `{ model, enabled }`. */
+  settings: () => ipcRenderer.invoke("space-summary:settings"),
+  /** Persists `{ model?, enabled? }`. */
+  setSettings: (patch) => ipcRenderer.invoke("space-summary:set-settings", patch),
+});
