@@ -542,7 +542,7 @@ describe("ConversationPanel filters and pagination", () => {
       const user = userEvent.setup();
       const deleteSpy = vi
         .spyOn(AgentServerConversationService, "deleteConversation")
-        .mockResolvedValue();
+        .mockResolvedValue(null);
 
       // Fixture: only recent conversations (none older than 1h). Before the
       // fix the "Delete all" button was disabled in this state.
@@ -592,7 +592,7 @@ describe("ConversationPanel filters and pagination", () => {
       const user = userEvent.setup();
       const deleteSpy = vi
         .spyOn(AgentServerConversationService, "deleteConversation")
-        .mockResolvedValue();
+        .mockResolvedValue(null);
 
       vi.spyOn(
         AgentServerConversationService,
@@ -659,6 +659,7 @@ describe("ConversationPanel filters and pagination", () => {
           if (conversationId === "old2") {
             throw new Error("delete failed");
           }
+          return null;
         });
 
       vi.spyOn(
@@ -714,6 +715,7 @@ describe("ConversationPanel filters and pagination", () => {
           if (conversationId === "old1") {
             throw new Error("delete failed");
           }
+          return null;
         });
 
       vi.spyOn(

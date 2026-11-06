@@ -1046,7 +1046,9 @@ export function ConversationPanel({
     const idsToDelete = allLoadedConversations.map((c) => c.id);
     const results = await Promise.allSettled(
       idsToDelete.map((conversationId) =>
-        deleteConversationAsync({ conversationId }),
+        // No per-conversation agent-session notice: this loop ends in the
+        // aggregate failure toast below.
+        deleteConversationAsync({ conversationId, agentSessionToast: false }),
       ),
     );
 

@@ -296,6 +296,7 @@ describe("ConversationPanel conversation actions", () => {
       if (index !== -1) {
         mockData.splice(index, 1);
       }
+      return null;
     });
 
     renderConversationPanel();
