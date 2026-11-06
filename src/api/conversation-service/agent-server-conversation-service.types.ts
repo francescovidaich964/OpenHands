@@ -336,3 +336,15 @@ export interface RuntimeConversationInfo {
   /** Models an ACP session reported; empty otherwise. */
   available_models: ACPModelOption[];
 }
+
+/**
+ * What the agent-server reported about the agent's OWN copy of a deleted
+ * conversation's session (#40). `null` (no outcome at all) means the question
+ * does not apply: a cloud conversation, an agent that never advertised
+ * `session/delete`, or an agent-server too old to answer it.
+ */
+export interface AcpSessionDeleteOutcome {
+  /** True = deleted with the conversation, false = asked the agent and it failed. */
+  acp_session_deleted: boolean;
+  acp_session_delete_error: string | null;
+}
