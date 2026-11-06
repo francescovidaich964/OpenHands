@@ -89,6 +89,7 @@ describe("getDisplayConversationTags", () => {
         owner: "alice",
         acpserver: "claude-code",
         title: "can you research an office app?",
+        unread: "true",
         origin: "slack",
         env: "prod",
         archiveworkspacepath: "/workspace/project",

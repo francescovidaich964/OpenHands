@@ -644,9 +644,11 @@ export const RESERVED_CONVERSATION_TAG_KEYS: ReadonlySet<string> = new Set([
   "working_dir",
   // `pinned` / `archived` are the sidebar's pin/archive flags (see
   // `conversation-tag-flags.ts`), surfaced by the pin icon and the archived
-  // presentation rather than as generic tag chips.
+  // presentation rather than as generic tag chips. `unread` is the same kind of
+  // flag (see `conversation-read-state.ts`), shown by the row's unread dot.
   "pinned",
   "archived",
+  "unread",
   LOCAL_PLANNER_PARENT_TAG_KEY,
   // The launched agent profile, which the app server stamps as tags; the
   // hovercard names the profile instead of echoing the raw id and revision.
