@@ -1559,6 +1559,11 @@ export function ConversationPanel({
             setSelectedConversationTitle(null);
           }}
           conversationTitle={selectedConversationTitle ?? undefined}
+          agentKind={
+            allLoadedConversations.find(
+              (conversation) => conversation.id === selectedConversationId,
+            )?.agent_kind
+          }
         />
       )}
 

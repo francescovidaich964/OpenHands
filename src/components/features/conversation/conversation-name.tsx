@@ -257,6 +257,7 @@ export function ConversationName() {
           onConfirm={handleConfirmDelete}
           onCancel={() => setConfirmDeleteModalVisible(false)}
           conversationTitle={conversation?.title || ""}
+          agentKind={conversation?.agent_kind}
         />
       )}
 

@@ -8,6 +8,7 @@ import { ModalBackdrop } from "#/components/shared/modals/modal-backdrop";
 import { ModalBody } from "#/components/shared/modals/modal-body";
 import { BrandButton } from "../settings/brand-button";
 import { I18nKey } from "#/i18n/declaration";
+import { AppConversation } from "#/api/conversation-service/agent-server-conversation-service.types";
 
 interface ConfirmDeleteModalProps {
   onConfirm: () => void;
@@ -15,6 +16,13 @@ interface ConfirmDeleteModalProps {
   conversationTitle?: string;
   title?: string;
   description?: React.ReactNode;
+  /**
+   * Kind of the deleted conversation's agent. `acp` adds the line explaining
+   * that the agent's own session (opencode's session store, a Claude Code
+   * transcript) goes with the conversation, because that copy is outside
+   * OpenHands' data and the user cannot see it in the app (#40).
+   */
+  agentKind?: AppConversation["agent_kind"];
 }
 
 export function ConfirmDeleteModal({
@@ -23,6 +31,7 @@ export function ConfirmDeleteModal({
   conversationTitle,
   title,
   description,
+  agentKind,
 }: ConfirmDeleteModalProps) {
   const { t } = useTranslation("openhands");
 
@@ -50,6 +59,16 @@ export function ConfirmDeleteModal({
             title={title ?? t(I18nKey.CONVERSATION$CONFIRM_DELETE)}
           />
           <BaseModalDescription>{confirmationMessage}</BaseModalDescription>
+          {/* The agent-side capability is not part of the conversation record, so
+              every ACP conversation gets the note and its wording is conditional
+              on the agent supporting `session/delete`. */}
+          {agentKind === "acp" && (
+            <BaseModalDescription>
+              <span data-testid="agent-session-delete-note">
+                {t(I18nKey.CONVERSATION$DELETE_AGENT_SESSION_NOTE)}
+              </span>
+            </BaseModalDescription>
+          )}
         </div>
         <div
           className="flex justify-end gap-2 w-full"
