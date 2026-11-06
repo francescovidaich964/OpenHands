@@ -26,7 +26,7 @@ vi.mock("#/utils/custom-toast-handlers", () => ({
 
 /** Deletes one conversation through the hook and returns nothing but the call. */
 async function deleteConversation(
-  outcome: AcpSessionDeleteOutcome | null,
+  outcome: AcpSessionDeleteOutcome | undefined,
   variables: { conversationId: string; agentSessionToast?: boolean } = {
     conversationId: "conv-1",
   },
@@ -74,7 +74,7 @@ describe("useDeleteConversation agent-session notice", () => {
   });
 
   it("stays quiet when the backend has nothing to report", async () => {
-    await deleteConversation(null);
+    await deleteConversation(undefined);
 
     expect(displaySuccessToast).not.toHaveBeenCalled();
     expect(displayWarningToast).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe("useDeleteConversation", () => {
     vi.spyOn(
       AgentServerConversationService,
       "deleteConversation",
-    ).mockResolvedValue(null);
+    ).mockResolvedValue(undefined);
 
     const queryClient = new QueryClient();
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");

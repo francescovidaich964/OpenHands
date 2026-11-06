@@ -2,10 +2,10 @@ import {
   type ACPModelInfo,
   ConversationSortOrder,
   type ForkConversationRequest,
-  HttpClient,
   type LLMConfig,
   type VSCodeStatusResponse,
 } from "@openhands/typescript-client";
+import { RemoteWorkspace } from "@openhands/typescript-client/workspace/remote-workspace";
 import {
   ConversationClient,
   FileClient,
@@ -1125,11 +1125,11 @@ class AgentServerConversationService {
 
   static async deleteConversation(
     conversationId: string,
-  ): Promise<AcpSessionDeleteOutcome | null> {
+  ): Promise<AcpSessionDeleteOutcome | undefined> {
     if (getActiveBackend().backend.kind === "cloud") {
       await deleteCloudConversation(conversationId);
       removeStoredConversationMetadata(conversationId);
-      return null;
+      return undefined;
     }
 
     // The agent-server orphans children rather than cascading, and the local
@@ -1159,19 +1159,16 @@ class AgentServerConversationService {
 
     // ConversationClient#deleteConversation discards the response body, and the
     // agent-server reports the agent-side session outcome in that body (#40), so
-    // this one call goes out through the raw client it is built on. A server too
-    // old to answer simply omits the field, which reads as "nothing to report".
-    const { data } = await new HttpClient({
-      baseUrl: options.host,
-      apiKey: options.apiKey,
-      timeout: options.timeout,
-    }).delete<Partial<AcpSessionDeleteOutcome>>(
-      `/api/conversations/${conversationId}`,
-    );
+    // this one call goes out through the SDK workspace's public client (as the
+    // git service does for endpoints the typed wrappers do not cover). A server
+    // too old to answer simply omits the field: "nothing to report".
+    const { data } = await new RemoteWorkspace(options).client.delete<
+      Partial<AcpSessionDeleteOutcome> | undefined
+    >(`/api/conversations/${conversationId}`);
     removeStoredConversationMetadata(conversationId);
 
     if (typeof data?.acp_session_deleted !== "boolean") {
-      return null;
+      return undefined;
     }
     return {
       acp_session_deleted: data.acp_session_deleted,
