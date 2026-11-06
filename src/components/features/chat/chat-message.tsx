@@ -17,9 +17,17 @@ import {
   USER_MESSAGE_LINE_HEIGHT_PX,
 } from "./user-message-body";
 import { QuoteCard } from "./quote-card";
-import { splitReplyFromText } from "#/utils/message-quote";
+import { QuotePassageCard } from "./quote-passage-card";
+import { registerMessageSource } from "#/utils/quote-anchor";
+import {
+  splitReplyFromText,
+  splitQuoteEnvelopesFromText,
+} from "#/utils/message-quote";
 
 export type ChatMessagePendingStatus = "sending" | "error";
+
+const AUTHOR_USER = "user";
+const AUTHOR_AGENT = "agent";
 
 interface ChatMessageProps {
   type: SourceType;
@@ -139,7 +147,15 @@ export function ChatMessage({
   // (a 6+ line quote must never swallow the follow-up behind the clamp).
   const reply = type === "user" ? splitReplyFromText(message) : null;
   const replyQuote = reply?.quote ?? null;
-  const bodyText = reply ? reply.body : message;
+  const withoutReply = reply ? reply.body : message;
+  // A passage-quote envelope (the Devin-style comment-on-selection wire format)
+  // also rides in the user bubble: it becomes a card and must never reach the
+  // markdown renderer.
+  const passageQuotes =
+    type === "user"
+      ? splitQuoteEnvelopesFromText(withoutReply)
+      : { quotes: [], rest: withoutReply };
+  const bodyText = passageQuotes.rest;
 
   const messageContent = useTruncatedUserBody ? (
     <div ref={pendingMessageContentRef} className="min-w-0">
@@ -161,6 +177,10 @@ export function ChatMessage({
         allowHtml
         components={chatBubbleMarkdownComponents}
         streaming={isStreaming}
+        // Source-line stamps make a selection collapse back to markdown source
+        // lines (so a quoted list keeps its "- " bullets). Only useful on a
+        // bubble that can be quoted, i.e. one that carries an event id.
+        sourceAnchors={!!eventId}
       >
         {bodyText}
       </MarkdownRenderer>
@@ -169,23 +189,53 @@ export function ChatMessage({
 
   const jumpToEvent = useJumpToEvent();
 
-  const renderedMessageContent = replyQuote ? (
-    <>
-      <QuoteCard
-        quote={replyQuote}
-        onJump={() => jumpToEvent(replyQuote.sourceEventId)}
-      />
-      {messageContent}
-    </>
-  ) : (
-    messageContent
-  );
+  const renderedMessageContent =
+    replyQuote || passageQuotes.quotes.length > 0 ? (
+      <>
+        {passageQuotes.quotes.map((quote, index) => (
+          <QuotePassageCard
+            key={`${quote.eventId}-${quote.startLine ?? "x"}-${index}`}
+            quote={quote}
+          />
+        ))}
+        {replyQuote && (
+          <QuoteCard
+            quote={replyQuote}
+            onJump={() => jumpToEvent(replyQuote.sourceEventId)}
+          />
+        )}
+        {messageContent}
+      </>
+    ) : (
+      messageContent
+    );
+
+  // The markdown source behind the bubble, so selecting a whole block quotes it
+  // verbatim (with its "-" markers and fences) instead of the flattened text.
+  const bubbleRef = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    if (bubbleRef.current) registerMessageSource(bubbleRef.current, bodyText);
+  }, [bodyText]);
+
+  // DOM anchor for the selection hook, never shown: the values are the wire
+  // format's own author vocabulary, not copy to translate.
+  const authorAnchor = type === "user" ? AUTHOR_USER : AUTHOR_AGENT;
 
   const messageBubble = (
     <article
+      ref={bubbleRef}
       data-testid={`${type}-message`}
       data-pending-status={pendingStatus}
-      {...(eventId ? { "data-event-id": eventId } : {})}
+      {...(eventId
+        ? {
+            "data-event-id": eventId,
+            // Devin-parity anchors: the selection hook reads the source message
+            // off the bubble, and a quote card jumps back through them.
+            "data-message-event-id": eventId,
+            "data-message-author": authorAnchor,
+            ...(timestamp ? { "data-message-ts": timestamp } : {}),
+          }
+        : {})}
       onMouseEnter={() => {
         setIsHovering(true);
       }}
@@ -210,6 +260,9 @@ export function ChatMessage({
           !isHovering || pendingStatus === "sending" ? "hidden" : "flex",
           "items-center gap-1",
         )}
+        // Copy/expand/retry controls are hover overlays inside the bubble: a
+        // selection that catches one must not put its label in the quote.
+        data-quote-exclude
         onClick={(event) => event.stopPropagation()}
       >
         {actions?.map((action, index) =>

@@ -23,6 +23,7 @@ import { useOptimisticUserMessageStore } from "#/stores/optimistic-user-message-
 import { useConversationStateStore } from "#/stores/conversation-state-store";
 import { useBrowserStore } from "#/stores/browser-store";
 import { useGoalStore } from "#/stores/goal-store";
+import { stripQuoteEnvelopes } from "#/utils/message-quote";
 import {
   isAgentServerEvent,
   isAgentErrorEvent,
@@ -1306,7 +1307,7 @@ export function ConversationWebSocketProvider({
 
   const hasSendingBubble = useCallback(
     (targetConversationId: string, message: SendMessageRequest) => {
-      const text = heldMessageText(message).trim();
+      const text = stripQuoteEnvelopes(heldMessageText(message)).trim();
       return useOptimisticUserMessageStore
         .getState()
         .pendingMessages.some(

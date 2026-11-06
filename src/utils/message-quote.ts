@@ -206,3 +206,139 @@ export const quoteBodyForEvent = (
     truncated,
   };
 };
+
+/* --------------------------------------------------------------------------
+ * Passage quote ("comment on a selected passage").
+ *
+ * Same job as the `<reply-to>` envelope above, finer granularity: it carries a
+ * *selection* out of one message. The envelope is a text part of its own on the
+ * wire (never merged with the typed comment) and the comment is what the user
+ * typed, so an agent sees "<the passage I mean> then <my comment>".
+ * ------------------------------------------------------------------------ */
+
+/** Program identifiers, not i18n keys — the wire format is locale-independent. */
+export const QUOTE_OPEN_TAG = "<quoted_artifact";
+export const QUOTE_CLOSE_TAG = "</quoted_artifact>";
+
+/**
+ * Soft cap on a selected passage. A passage is chosen by hand, so the cap only
+ * catches select-all on a very long reply; `truncated` tells the card to say so.
+ */
+export const MAX_PASSAGE_BODY = 4000;
+
+export interface PassageQuote {
+  /** id of the message the passage was selected from. */
+  eventId: string;
+  author: "user" | "agent";
+  /** What the user said about the passage; empty means a bare quote. */
+  caption: string;
+  /** The passage: markdown source lines when known, selection text otherwise. */
+  content: string;
+  /**
+   * 1-based markdown source lines the passage spans inside the source message.
+   * Optional: it lets clicking a card re-select the passage instead of falling
+   * back to a text search. Devin's format has no locator, so a foreign
+   * envelope without one still parses.
+   */
+  startLine?: number;
+  endLine?: number;
+  truncated: boolean;
+}
+
+const escapeXml = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const unescapeXml = (value: string): string =>
+  value
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+
+const attribute = (name: string, value: string): string =>
+  ` ${name}="${escapeXml(value)}"`;
+
+/**
+ * Builds the wire envelope for a passage quote. Caption is omitted when empty.
+ */
+export const buildQuoteEnvelope = (quote: PassageQuote): string => {
+  const content =
+    quote.content.length > MAX_PASSAGE_BODY
+      ? quote.content.slice(0, MAX_PASSAGE_BODY)
+      : quote.content;
+  const truncated = quote.truncated || content.length !== quote.content.length;
+
+  let open = `${QUOTE_OPEN_TAG} kind="message"${attribute("event_id", quote.eventId)}${attribute("author", quote.author)}`;
+  if (quote.startLine != null && quote.endLine != null) {
+    open += ` start_line="${quote.startLine}" end_line="${quote.endLine}"`;
+  }
+  if (truncated) open += ' truncated="true"';
+  open += ">";
+
+  const caption = quote.caption.trim()
+    ? `<caption>${escapeXml(quote.caption.trim())}</caption>\n`
+    : "";
+
+  return `${open}\n${caption}<content>\n${escapeXml(content)}\n</content>\n${QUOTE_CLOSE_TAG}`;
+};
+
+const QUOTE_ENVELOPE =
+  /<quoted_artifact\b([^>]*)>\n(?:<caption>([\s\S]*?)<\/caption>\n)?<content>\n([\s\S]*?)\n<\/content>\n<\/quoted_artifact>/g;
+
+const numberAttribute = (
+  attributes: string,
+  name: string,
+): number | undefined => {
+  const m = attributes.match(new RegExp(` ${name}="(\\d+)"`));
+  return m ? Number(m[1]) : undefined;
+};
+
+const stringAttribute = (attributes: string, name: string): string => {
+  const m = attributes.match(new RegExp(` ${name}="([^"]*)"`));
+  return m ? unescapeXml(m[1]) : "";
+};
+
+/**
+ * Every passage envelope in a text, in order, plus the text with them removed.
+ * A malformed or unclosed envelope is left in `rest` verbatim: unknown markup
+ * must reach the screen rather than disappear with a half-parsed quote.
+ */
+export const splitQuoteEnvelopesFromText = (
+  text: string,
+): { quotes: PassageQuote[]; rest: string } => {
+  const quotes: PassageQuote[] = [];
+  // A fresh lastIndex each call: the regex is shared and stateful.
+  QUOTE_ENVELOPE.lastIndex = 0;
+  const rest = text.replace(
+    QUOTE_ENVELOPE,
+    (match, attrs: string, cap, body) => {
+      const author = stringAttribute(attrs, "author");
+      const eventId = stringAttribute(attrs, "event_id");
+      if (!eventId) return match;
+      quotes.push({
+        eventId,
+        author: author === "user" ? "user" : "agent",
+        caption: cap == null ? "" : unescapeXml(cap),
+        content: unescapeXml(body),
+        startLine: numberAttribute(attrs, "start_line"),
+        endLine: numberAttribute(attrs, "end_line"),
+        truncated: / truncated="true"/.test(attrs),
+      });
+      return "";
+    },
+  );
+
+  return { quotes, rest: rest.replace(/^\n+|\n+$/g, "") };
+};
+
+/** Display text for a message that carries passage envelopes (cards show the rest). */
+export const stripQuoteEnvelopes = (text: string): string =>
+  splitQuoteEnvelopesFromText(text).rest;
+
+/** True when a message text carries at least one passage envelope. */
+export const hasQuoteEnvelope = (text: string): boolean =>
+  splitQuoteEnvelopesFromText(text).quotes.length > 0;

@@ -193,3 +193,20 @@ code {
     animation: none;
   }
 }
+
+/* Passage-quote jump: brief highlight on the message a quote card scrolled to
+   (see QUOTE_FLASH_CLASS; the timeout that removes it is 1200 ms). */
+@keyframes quote-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(59 130 246 / 0);
+  }
+  30% {
+    box-shadow: 0 0 0 3px rgb(59 130 246 / 0.55);
+  }
+}
+
+.quote-flash {
+  animation: quote-flash 1.2s ease-out 1;
+  border-radius: 0.75rem;
+}
