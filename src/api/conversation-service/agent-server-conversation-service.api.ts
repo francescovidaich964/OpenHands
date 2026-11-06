@@ -1200,15 +1200,14 @@ class AgentServerConversationService {
 
   /**
    * Sets or clears boolean conversation flags carried in server-side tags
-   * (e.g. `pinned` / `archived`; see `conversation-tag-flags.ts`). Works on
-   * both backends: the local agent-server receives the complete replacement
-   * map derived from `currentTags` (its PATCH is replace-all), while the
-   * Cloud app-server receives a merge patch that sets enabled keys and
-   * deletes disabled ones, leaving every other tag untouched.
+   * (e.g. `pinned` / `archived` / `unread`; see `conversation-tag-flags.ts`).
+   * Works on both backends: the local agent-server receives the complete
+   * replacement map it currently holds with the changes applied (its PATCH is
+   * replace-all), while the Cloud app-server receives a merge patch that sets
+   * enabled keys and deletes disabled ones, leaving every other tag untouched.
    */
   static async updateConversationTagFlags(
     conversationId: string,
-    currentTags: Record<string, string> | null | undefined,
     changes: Record<string, boolean>,
   ): Promise<AppConversation> {
     if (getActiveBackend().backend.kind === "cloud") {
@@ -1218,10 +1217,19 @@ class AgentServerConversationService {
       );
     }
 
+    // The replacement map is built from what the server holds *now*, read here,
+    // and never from a caller's copy of the list: two writers in a row (move the
+    // row to a Space, then mark it unread from the same menu before the list
+    // refetch lands) would otherwise let the second PATCH rewrite the map from
+    // the pre-first-write snapshot and silently drop the other's tag.
+    const [current] = await this.batchGetAppConversations([conversationId]);
     await new ConversationClient(
       getAgentServerClientOptions(),
     ).updateConversation(conversationId, {
-      tags: withConversationTagFlags(currentTags, changes),
+      tags: withConversationTagFlags(
+        requireAppConversation(current, conversationId).tags,
+        changes,
+      ),
     });
     const [conversation] = await this.batchGetAppConversations([
       conversationId,

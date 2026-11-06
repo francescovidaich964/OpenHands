@@ -855,7 +855,7 @@ describe("ConversationPanel list loading", () => {
       vi.spyOn(
         AgentServerConversationService,
         "updateConversationTagFlags",
-      ).mockImplementation(async (conversationId, _currentTags, changes) => {
+      ).mockImplementation(async (conversationId, changes) => {
         const target = items.find(
           (conversation) => conversation.id === conversationId,
         )!;

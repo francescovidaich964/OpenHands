@@ -321,7 +321,7 @@ describe("AgentServerConversationService", () => {
       ).rejects.toThrow("gone");
     });
 
-    it("applies tag flags locally as a full replacement map merged with current tags", async () => {
+    it("applies tag flags locally as a full replacement map merged with the tags the server holds", async () => {
       const refreshedTags = {
         origin: "slack",
         acpserver: "codex",
@@ -334,15 +334,54 @@ describe("AgentServerConversationService", () => {
       const result =
         await AgentServerConversationService.updateConversationTagFlags(
           "conv-1",
-          { origin: "slack", acpserver: "codex", pinned: "true" },
           { archived: true, pinned: false },
         );
       // Local PATCH is replace-all: the writer merges the flag changes into
-      // the current map, preserving unrelated and reserved keys.
+      // the server's map, preserving unrelated and reserved keys.
       expect(mockUpdateConversation).toHaveBeenCalledWith("conv-1", {
         tags: refreshedTags,
       });
       expect(result.tags).toEqual(refreshedTags);
+    });
+
+    it("merges flag changes into the tags the server holds, not the caller's cached copy", async () => {
+      // The local PATCH replaces the WHOLE tag map, so merging into a stale
+      // sidebar copy loses anything written since that list load: move a row
+      // to a Space and mark it unread from the same menu before the list
+      // refetch lands, and the Space membership would be dropped.
+      mockUpdateConversation.mockResolvedValue(undefined);
+      mockHttpGet
+        // what the server holds when the write starts
+        .mockResolvedValueOnce({
+          data: [
+            makeDirectConversation({
+              tags: { canvasspace: "space-1", unread: "true" },
+            }),
+          ],
+        })
+        // and after it
+        .mockResolvedValueOnce({
+          data: [makeDirectConversation({ tags: { canvasspace: "space-1" } })],
+        });
+
+      await AgentServerConversationService.updateConversationTagFlags(
+        "conv-1",
+        { unread: false },
+      );
+
+      expect(mockUpdateConversation).toHaveBeenCalledWith("conv-1", {
+        tags: { canvasspace: "space-1" },
+      });
+    });
+
+    it("refuses the flag write when the conversation is already gone", async () => {
+      mockHttpGet.mockResolvedValue({ data: [] });
+      await expect(
+        AgentServerConversationService.updateConversationTagFlags("gone", {
+          pinned: true,
+        }),
+      ).rejects.toThrow("gone");
+      expect(mockUpdateConversation).not.toHaveBeenCalled();
     });
 
     it("applies tag flags on Cloud as a merge patch without touching other keys", async () => {
@@ -353,11 +392,10 @@ describe("AgentServerConversationService", () => {
       });
       const requests = captureRequests(["patch"], updated);
       await expect(
-        AgentServerConversationService.updateConversationTagFlags(
-          "conv-1",
-          { origin: "slack", pinned: "true", archived: "true" },
-          { pinned: false, archived: true },
-        ),
+        AgentServerConversationService.updateConversationTagFlags("conv-1", {
+          pinned: false,
+          archived: true,
+        }),
       ).resolves.toEqual(updated);
       // Cloud PATCH merges server-side: disabled flags delete via null and
       // unmentioned keys (origin, server-managed keys) are never sent.

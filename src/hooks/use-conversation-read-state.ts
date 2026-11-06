@@ -62,7 +62,6 @@ export function useConversationReadState({
     if (!activeHasUnreadTag) return;
     updateConversationTagFlags({
       conversationId: activeId,
-      currentTags: activeTags,
       changes: conversationUnreadTagChanges(false),
     });
   }, [
