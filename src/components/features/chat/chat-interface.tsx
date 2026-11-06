@@ -16,6 +16,14 @@ import { isAcpAuthErrorCode } from "#/utils/acp-error-codes";
 import { getLockedCloudHost } from "#/api/agent-server-config";
 import { convertImageToBase64 } from "#/utils/convert-image-to-base-64";
 import { createChatMessage } from "#/services/chat-service";
+import {
+  usePendingQuote,
+  usePendingQuoteStore,
+  readStagedQuote,
+} from "#/stores/pending-quote-store";
+import { buildQuoteEnvelope, stripQuoteEnvelopes } from "#/utils/message-quote";
+import { useMessageSelection } from "#/hooks/use-message-selection";
+import { QuoteSelectionPopup } from "#/components/features/chat/quote-selection-popup";
 import { BtwMessages } from "./btw-messages";
 import { GoalStatusBanner } from "./goal-status-banner";
 import { ModelMessages } from "./model-messages";
@@ -231,6 +239,15 @@ export function ChatInterface({
 
   const { conversationId } = useOptionalConversationId();
 
+  // Passage-comment state (Devin parity): a fresh selection awaiting a caption,
+  // and the quote staged in the composer for the next send.
+  const { draft: quoteDraft, dismiss: dismissQuoteDraft } =
+    useMessageSelection();
+  const stagedQuote = usePendingQuote(conversationId ?? "");
+  const quoteEditTarget = usePendingQuoteStore((state) =>
+    state.editing?.conversationId === conversationId ? state.editing : null,
+  );
+
   // The live goal banner renders in the scroll stream but advances via store
   // updates (in-progress goal events are filtered out of `renderableEvents`),
   // so the bottom-following effect would not react to it. This key changes as
@@ -429,6 +446,11 @@ export function ChatInterface({
     content: string,
     originalImages: File[],
     originalFiles: File[],
+    /**
+     * A passage quote sent straight from the popup, already wrapped. Without
+     * it, a quote staged in the composer travels with this send instead.
+     */
+    quoteEnvelope?: string,
   ) => {
     // Handle /new command for V1 conversations
     if (content.trim() === "/new") {
@@ -497,6 +519,16 @@ export function ChatInterface({
     const prompt =
       uploadedFiles.length > 0 ? `${content}\n\n${filePrompt}` : content;
 
+    // Devin's shape: the quote is its own text part on the wire and the composer
+    // text stays the first part. A quote sent straight from the popup arrives as
+    // `quoteEnvelope`; a quote staged in the composer rides along with the send.
+    const staged = conversationId ? readStagedQuote(conversationId) : null;
+    const envelope =
+      quoteEnvelope ?? (staged ? buildQuoteEnvelope(staged) : null);
+    const extra = envelope ? [envelope] : [];
+    if (!quoteEnvelope && staged && conversationId)
+      usePendingQuoteStore.getState().discard(conversationId);
+
     // Enqueue the message into the local pending queue with status "sending"
     // so the user immediately sees it in the chat with a faded treatment. The
     // entry is removed when the WebSocket echoes back the corresponding
@@ -508,8 +540,8 @@ export function ChatInterface({
       // actually hand to the server (the prompt may include an appended
       // "Files uploaded: …" block) and is what the echo will be matched
       // against. They're different when there are file attachments.
-      text: content,
-      content: prompt,
+      text: envelope ? `${content.trimEnd()}\n\n${envelope}` : content,
+      content: stripQuoteEnvelopes(`${prompt}${envelope ?? ""}`),
       imageUrls,
       fileUrls: uploadedFiles,
       timestamp,
@@ -522,7 +554,7 @@ export function ChatInterface({
 
     try {
       await send(
-        createChatMessage(prompt, imageUrls, uploadedFiles, timestamp),
+        createChatMessage(prompt, imageUrls, uploadedFiles, timestamp, extra),
       );
       const errors = useErrorMessageStore.getState();
       if (errors.errorCode === STARTUP_UPLOAD_ERROR_CODE)
@@ -671,6 +703,42 @@ export function ChatInterface({
   const dockedOrInlineComposer = composerDockTarget
     ? createPortal(composer, composerDockTarget)
     : composer;
+
+  // The popup shows a fresh selection; when there is none it is re-opened from
+  // the composer pill to edit the quote that is already staged.
+  const popupQuote = quoteDraft
+    ? quoteDraft.quote
+    : quoteEditTarget && stagedQuote
+      ? stagedQuote
+      : null;
+  const popupAt = quoteDraft
+    ? { x: quoteDraft.x, y: quoteDraft.y }
+    : quoteEditTarget
+      ? { x: quoteEditTarget.x, y: quoteEditTarget.y }
+      : null;
+
+  const closeQuotePopup = () => {
+    dismissQuoteDraft();
+    usePendingQuoteStore.getState().endEdit();
+  };
+
+  const stageFromPopup = (caption: string) => {
+    if (!popupQuote || !conversationId) return closeQuotePopup();
+    usePendingQuoteStore
+      .getState()
+      .stage(conversationId, { ...popupQuote, caption: caption.trim() });
+    closeQuotePopup();
+  };
+
+  const sendFromPopup = (caption: string) => {
+    if (!popupQuote) return closeQuotePopup();
+    const envelopeText = buildQuoteEnvelope({
+      ...popupQuote,
+      caption: caption.trim(),
+    });
+    closeQuotePopup();
+    void handleSendMessage(caption.trim(), [], [], envelopeText);
+  };
 
   return (
     <WorkspaceFilesForChatProvider>
@@ -854,6 +922,16 @@ export function ChatInterface({
             )}
           </div>
         </div>
+        {popupQuote && popupAt && (
+          <QuoteSelectionPopup
+            position={popupAt}
+            initialCaption={popupQuote.caption}
+            isEditing={!quoteDraft}
+            onSave={stageFromPopup}
+            onSend={sendFromPopup}
+            onStage={stageFromPopup}
+          />
+        )}
       </ScrollProvider>
     </WorkspaceFilesForChatProvider>
   );

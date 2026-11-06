@@ -30,12 +30,19 @@ export function useSendMessage() {
             image_urls?: string[];
             file_urls?: string[];
             timestamp?: string;
+            extra_text_parts?: string[];
           };
         };
 
         if (action === "message" && args?.content) {
           // Build agent-server message content array
           const content: Array<MessageContent> = [
+            // Devin's shape: a quoted passage is its own text part, ahead of the
+            // comment the user typed. Plain messages send nothing extra.
+            ...(args.extra_text_parts ?? []).map((text) => ({
+              type: "text" as const,
+              text,
+            })),
             {
               type: "text",
               text: args.content,

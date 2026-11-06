@@ -17,6 +17,7 @@ import { hr } from "./horizontal-rule";
 import { remarkGithubAlerts } from "./remark-github-alerts";
 import { advanceStableMarkdownBoundary } from "#/utils/split-stable-markdown";
 import { RevealClock, rehypeFadeInWords } from "./rehype-fade-in-words";
+import { rehypeSourceLineMarkers } from "./rehype-source-line-markers";
 
 // Build a sanitize schema that extends rehype-sanitize's defaults with a
 // few markdown-friendly additions. The defaults strip `<script>`, event
@@ -51,7 +52,17 @@ export const MARKDOWN_SANITIZE_SCHEMA: Schema = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
-    "*": [...(defaultSchema.attributes?.["*"] ?? []), "className", "id"],
+    // Passage-quote anchors (see rehype-source-line-markers). Agent-authored
+    // markup can set them too; the worst case is a quote that highlights the
+    // wrong lines, never a script or a URL.
+    "*": [
+      ...(defaultSchema.attributes?.["*"] ?? []),
+      "className",
+      "id",
+      "data-md-marker",
+      "data-md-source-start",
+      "data-md-source-end",
+    ],
     // Call sites without `includeStandard` skip the `anchor` component, so
     // this schema alone guards `rel`/`target` on untrusted markdown.
     // `rel`: drop the `opener` token (it hands the opened page
@@ -131,6 +142,13 @@ interface MarkdownRendererProps {
    * words fade in.
    */
   streaming?: boolean;
+  /**
+   * Put each top-level block's markdown source lines in the DOM so a selection
+   * inside a message can be quoted from the source instead of the flattened
+   * rendered text. Off by default: only the chat bubbles quote, and the extra
+   * nodes are not paid for by every other markdown surface.
+   */
+  sourceAnchors?: boolean;
 }
 
 const remarkPlugins: PluggableList = [
@@ -240,6 +258,7 @@ function MarkdownRendererComponent({
   includeHeadings = false,
   allowHtml = true,
   streaming = false,
+  sourceAnchors = false,
 }: MarkdownRendererProps) {
   // Build the components object with defaults and optional additions.
   // Memoized so streamed blocks that did not change skip re-rendering.
@@ -275,7 +294,12 @@ function MarkdownRendererComponent({
     content ?? children ?? "",
     streaming,
   );
-  const rehypePlugins = allowHtml ? htmlRehypePlugins : undefined;
+  // Markers are appended last so nothing after them can strip the attributes.
+  const rehypePlugins = sourceAnchors
+    ? [...(allowHtml ? htmlRehypePlugins : []), rehypeSourceLineMarkers]
+    : allowHtml
+      ? htmlRehypePlugins
+      : undefined;
 
   // Blocks render as siblings in one wrapper, joined by the newline the
   // parser puts between top-level blocks, so the DOM (and `first:` / `last:`

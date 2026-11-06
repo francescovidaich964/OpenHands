@@ -1,12 +1,24 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { DragOver } from "../drag-over";
+import { QuoteCard } from "../quote-card";
+import { QuotePassageCard } from "../quote-passage-card";
 import { UploadedFiles } from "../uploaded-files";
 import { ChatInputRow } from "./chat-input-row";
 import { ChatInputActions } from "./chat-input-actions";
 import { SlashCommandMenu } from "./slash-command-menu";
 import { useConversationStore } from "#/stores/conversation-store";
+import { useOptionalConversationId } from "#/hooks/use-conversation-id";
+import {
+  usePendingReplyQuote,
+  useReplyQuoteStore,
+} from "#/stores/reply-quote-store";
+import {
+  usePendingQuote,
+  usePendingQuoteStore,
+} from "#/stores/pending-quote-store";
 import { cn } from "#/utils/utils";
 import { SlashCommandItem } from "#/hooks/chat/use-slash-command";
+import { useJumpToEvent } from "#/hooks/chat/use-jump-to-event";
 import { insertTextAtCaret } from "../utils/chat-input.utils";
 
 interface ChatInputContainerProps {
@@ -80,6 +92,9 @@ export function ChatInputContainer({
       {/* Drag Over UI */}
       {isDragOver && <DragOver />}
 
+      <QuoteSlot />
+      <PassageQuoteSlot />
+
       <UploadedFiles />
 
       {/* Wrapper so the slash menu anchors just above the input row,
@@ -117,6 +132,74 @@ export function ChatInputContainer({
           insertTextAtCaret(chatInputRef.current, text)
         }
         isDictationDisabled={isNewConversationPending}
+      />
+    </div>
+  );
+}
+
+/**
+ * The armed reply-quote card, rendered above the input row. Escape
+ * dismisses it (keyboard parity with the card's X button).
+ */
+function QuoteSlot() {
+  const { conversationId } = useOptionalConversationId();
+  const quote = usePendingReplyQuote(conversationId ?? "");
+  const jumpToEvent = useJumpToEvent();
+  useEffect(() => {
+    if (!quote) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        useReplyQuoteStore.getState().clearReplyQuote(quote.conversationId);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [quote]);
+
+  if (!conversationId || !quote) return null;
+
+  return (
+    <QuoteCard
+      quote={quote}
+      onJump={() => jumpToEvent(quote.sourceEventId)}
+      onDismiss={() =>
+        useReplyQuoteStore.getState().clearReplyQuote(quote.conversationId)
+      }
+    />
+  );
+}
+
+/**
+ * The staged passage quote (the selection popup's Escape path) as a pill above
+ * the input. Clicking it reopens the popup at the pill to edit the caption; X
+ * drops the quote. The next ordinary send carries it as its own text part.
+ */
+function PassageQuoteSlot() {
+  const { conversationId } = useOptionalConversationId();
+  const quote = usePendingQuote(conversationId ?? "");
+  const pillRef = React.useRef<HTMLDivElement>(null);
+
+  if (!conversationId || !quote) return null;
+
+  return (
+    <div
+      ref={pillRef}
+      data-testid="staged-quote-pill"
+      // The pill sits above the contenteditable: a click in it must not read as
+      // a new selection in the feed.
+      onMouseUp={(event) => event.stopPropagation()}
+    >
+      <QuotePassageCard
+        quote={quote}
+        onEdit={() => {
+          const box = pillRef.current?.getBoundingClientRect();
+          usePendingQuoteStore
+            .getState()
+            .beginEdit(conversationId, box?.left ?? 0, box?.bottom ?? 0);
+        }}
+        onDismiss={() =>
+          usePendingQuoteStore.getState().discard(conversationId)
+        }
       />
     </div>
   );

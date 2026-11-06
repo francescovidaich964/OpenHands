@@ -8,15 +8,26 @@ import { StyledTooltip } from "#/components/shared/buttons/styled-tooltip";
 import { I18nKey } from "#/i18n/declaration";
 import { TextShimmer } from "#/components/shared/text-shimmer";
 import { MessageTimestamp } from "./message-timestamp";
-import { MarkdownRenderer } from "../markdown/markdown-renderer";
 import { PendingStopIcon } from "./pending-stop-icon";
+import { MarkdownRenderer } from "../markdown/markdown-renderer";
+import { useJumpToEvent } from "#/hooks/chat/use-jump-to-event";
 import {
   UserMessageBody,
   chatBubbleMarkdownComponents,
   USER_MESSAGE_LINE_HEIGHT_PX,
 } from "./user-message-body";
+import { QuoteCard } from "./quote-card";
+import { QuotePassageCard } from "./quote-passage-card";
+import { registerMessageSource } from "#/utils/quote-anchor";
+import {
+  splitReplyFromText,
+  splitQuoteEnvelopesFromText,
+} from "#/utils/message-quote";
 
 export type ChatMessagePendingStatus = "sending" | "error";
+
+const AUTHOR_USER = "user";
+const AUTHOR_AGENT = "agent";
 
 interface ChatMessageProps {
   type: SourceType;
@@ -34,6 +45,12 @@ interface ChatMessageProps {
   onDismiss?: () => void;
   onStop?: () => void;
   timestamp?: string;
+  /**
+   * The source event's id, rendered as a `data-event-id` anchor so
+   * `useJumpToEvent` can scroll to this bubble. A product anchor, not a
+   * test hook.
+   */
+  eventId?: string;
   /** The message is a reply still being streamed in. */
   isStreaming?: boolean;
 }
@@ -51,6 +68,7 @@ export function ChatMessage({
   onDismiss,
   onStop,
   timestamp,
+  eventId,
   isStreaming = false,
 }: React.PropsWithChildren<ChatMessageProps>) {
   const { t } = useTranslation("openhands");
@@ -124,10 +142,25 @@ export function ChatMessage({
     return () => observer.disconnect();
   }, [message, canStopPendingMessage, useTruncatedUserBody]);
 
+  // User bubbles may carry a leading reply-quote envelope; extract it so the
+  // card renders above the body and only the follow-up feeds truncation
+  // (a 6+ line quote must never swallow the follow-up behind the clamp).
+  const reply = type === "user" ? splitReplyFromText(message) : null;
+  const replyQuote = reply?.quote ?? null;
+  const withoutReply = reply ? reply.body : message;
+  // A passage-quote envelope (the Devin-style comment-on-selection wire format)
+  // also rides in the user bubble: it becomes a card and must never reach the
+  // markdown renderer.
+  const passageQuotes =
+    type === "user"
+      ? splitQuoteEnvelopesFromText(withoutReply)
+      : { quotes: [], rest: withoutReply };
+  const bodyText = passageQuotes.rest;
+
   const messageContent = useTruncatedUserBody ? (
     <div ref={pendingMessageContentRef} className="min-w-0">
       <UserMessageBody
-        message={message}
+        message={bodyText}
         isHovering={isHovering}
         isExpanded={isExpanded}
         onTruncatableChange={setIsTruncatable}
@@ -144,18 +177,65 @@ export function ChatMessage({
         allowHtml
         components={chatBubbleMarkdownComponents}
         streaming={isStreaming}
+        // Source-line stamps make a selection collapse back to markdown source
+        // lines (so a quoted list keeps its "- " bullets). Only useful on a
+        // bubble that can be quoted, i.e. one that carries an event id.
+        sourceAnchors={!!eventId}
       >
-        {message}
+        {bodyText}
       </MarkdownRenderer>
     </div>
   );
 
-  const renderedMessageContent = messageContent;
+  const jumpToEvent = useJumpToEvent();
+
+  const renderedMessageContent =
+    replyQuote || passageQuotes.quotes.length > 0 ? (
+      <>
+        {passageQuotes.quotes.map((quote, index) => (
+          <QuotePassageCard
+            key={`${quote.eventId}-${quote.startLine ?? "x"}-${index}`}
+            quote={quote}
+          />
+        ))}
+        {replyQuote && (
+          <QuoteCard
+            quote={replyQuote}
+            onJump={() => jumpToEvent(replyQuote.sourceEventId)}
+          />
+        )}
+        {messageContent}
+      </>
+    ) : (
+      messageContent
+    );
+
+  // The markdown source behind the bubble, so selecting a whole block quotes it
+  // verbatim (with its "-" markers and fences) instead of the flattened text.
+  const bubbleRef = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    if (bubbleRef.current) registerMessageSource(bubbleRef.current, bodyText);
+  }, [bodyText]);
+
+  // DOM anchor for the selection hook, never shown: the values are the wire
+  // format's own author vocabulary, not copy to translate.
+  const authorAnchor = type === "user" ? AUTHOR_USER : AUTHOR_AGENT;
 
   const messageBubble = (
     <article
+      ref={bubbleRef}
       data-testid={`${type}-message`}
       data-pending-status={pendingStatus}
+      {...(eventId
+        ? {
+            "data-event-id": eventId,
+            // Devin-parity anchors: the selection hook reads the source message
+            // off the bubble, and a quote card jumps back through them.
+            "data-message-event-id": eventId,
+            "data-message-author": authorAnchor,
+            ...(timestamp ? { "data-message-ts": timestamp } : {}),
+          }
+        : {})}
       onMouseEnter={() => {
         setIsHovering(true);
       }}
@@ -180,6 +260,9 @@ export function ChatMessage({
           !isHovering || pendingStatus === "sending" ? "hidden" : "flex",
           "items-center gap-1",
         )}
+        // Copy/expand/retry controls are hover overlays inside the bubble: a
+        // selection that catches one must not put its label in the quote.
+        data-quote-exclude
         onClick={(event) => event.stopPropagation()}
       >
         {actions?.map((action, index) =>
