@@ -652,6 +652,9 @@ export const RESERVED_CONVERSATION_TAG_KEYS: ReadonlySet<string> = new Set([
   // hovercard names the profile instead of echoing the raw id and revision.
   "agentprofileid",
   "agentprofilerevision",
+  // `canvasspace` is the Spaces membership flag (see `src/utils/space-tags.ts`):
+  // the sidebar renders a member as a row inside its folder, not as a tag chip.
+  "canvasspace",
 ]);
 
 /**
