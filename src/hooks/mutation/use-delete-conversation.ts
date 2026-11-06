@@ -58,7 +58,7 @@ export const useDeleteConversation = () => {
     },
 
     onSuccess: (
-      outcome: AcpSessionDeleteOutcome | null,
+      outcome: AcpSessionDeleteOutcome | undefined,
       variables: DeleteConversationVariables,
     ) => {
       clearConversationLocalStorage(variables.conversationId);

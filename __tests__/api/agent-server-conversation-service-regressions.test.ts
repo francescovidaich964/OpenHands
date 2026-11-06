@@ -49,6 +49,13 @@ const {
 const originalFetch = global.fetch;
 const fetchMock = vi.fn();
 
+// The local delete reads the response body through the SDK workspace client.
+vi.mock("@openhands/typescript-client/workspace/remote-workspace", () => ({
+  RemoteWorkspace: vi.fn(function RemoteWorkspaceMock() {
+    return { client: { delete: (path: string) => mockHttpDelete(path) } };
+  }),
+}));
+
 vi.mock("@openhands/typescript-client/clients", async () => {
   const actual = await vi.importActual<
     typeof import("@openhands/typescript-client/clients")

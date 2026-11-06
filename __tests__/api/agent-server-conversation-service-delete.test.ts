@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { HttpClient } from "@openhands/typescript-client";
+import { RemoteWorkspace } from "@openhands/typescript-client/workspace/remote-workspace";
 import {
   __resetActiveStoreForTests,
   setActiveSelection,
@@ -14,19 +14,13 @@ vi.mock("#/api/cloud/proxy", () => ({
   callCloudProxy: vi.fn().mockResolvedValue(undefined),
 }));
 
-// The delete goes out through the raw HttpClient because ConversationClient
-// discards the response body the outcome lives in (#40).
-vi.mock("@openhands/typescript-client", async () => {
-  const actual = await vi.importActual<
-    typeof import("@openhands/typescript-client")
-  >("@openhands/typescript-client");
-  return {
-    ...actual,
-    HttpClient: vi.fn(function HttpClientMock() {
-      return { delete: mockDeleteRaw };
-    }),
-  };
-});
+// The delete goes out through the SDK workspace client because
+// ConversationClient discards the response body the outcome lives in (#40).
+vi.mock("@openhands/typescript-client/workspace/remote-workspace", () => ({
+  RemoteWorkspace: vi.fn(function RemoteWorkspaceMock() {
+    return { client: { delete: mockDeleteRaw } };
+  }),
+}));
 
 vi.mock("@openhands/typescript-client/clients", async () => {
   const actual = await vi.importActual<
@@ -95,7 +89,7 @@ describe("AgentServerConversationService.deleteConversation", () => {
         acp_session_delete_error: "delete: connection closed",
       },
     ],
-    ["older agent-server", { success: true }, null],
+    ["older agent-server", { success: true }, undefined],
   ])(
     "reports the agent-session outcome (%s) from the delete response body",
     async (_case, body, expected) => {
@@ -106,8 +100,8 @@ describe("AgentServerConversationService.deleteConversation", () => {
         AgentServerConversationService.deleteConversation("conv-1"),
       ).resolves.toEqual(expected);
 
-      expect(HttpClient).toHaveBeenCalledWith(
-        expect.objectContaining({ baseUrl: localBackend.host }),
+      expect(RemoteWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ host: localBackend.host }),
       );
       expect(mockDeleteRaw).toHaveBeenCalledWith("/api/conversations/conv-1");
     },
@@ -118,8 +112,8 @@ describe("AgentServerConversationService.deleteConversation", () => {
 
     await expect(
       AgentServerConversationService.deleteConversation("conv-1"),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
 
-    expect(HttpClient).not.toHaveBeenCalled();
+    expect(RemoteWorkspace).not.toHaveBeenCalled();
   });
 });
