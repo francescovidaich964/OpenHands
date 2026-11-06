@@ -357,16 +357,22 @@ describe("AgentSettingsScreen", () => {
       source: "live",
     });
     const user = userEvent.setup();
+    // A saved `default` with an effort suffix: the adapter's own `default` row
+    // is normally hidden beside "Agent default", but the saved model must stay
+    // listed even when it carries an effort.
     const { control } = renderAgentSettingsScreen({
-      agentSettingsOverride: { ...CLAUDE_PROFILE, acp_model: "haiku/high" },
+      agentSettingsOverride: { ...CLAUDE_PROFILE, acp_model: "default/high" },
     });
 
     await screen.findByTestId("agent-command-input");
     await user.click(screen.getByLabelText("SETTINGS$AGENT_MODEL"));
-    await user.click(await screen.findByText("Default (recommended)"));
+    expect(
+      await screen.findByText("Default (recommended)"),
+    ).toBeInTheDocument();
+    await user.click(await screen.findByText("Haiku"));
 
     expect(control().buildAgentProfileFields()).toMatchObject({
-      acp_model: "default/high",
+      acp_model: "haiku/high",
     });
   });
 

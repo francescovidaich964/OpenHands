@@ -1105,11 +1105,12 @@ export function AgentSettingsScreen({
   // The "Agent default" row above the adapter's list already is the adapter's own
   // ``default`` model, so that entry is dropped while the row is offered — except
   // when it is the saved model, which has to stay listed to be labelled and
-  // re-selected.
+  // re-selected. Compared on the base id: an effort suffix (`default/high`) must
+  // not hide the saved row.
   const modelOptions = withoutDuplicateAcpDefault(
     modelSuggestions,
     offersAgentDefault,
-    acpModel,
+    acpModelBase,
   );
   const commandPlaceholder =
     formatCommand(acpProviders[0]?.default_command ?? []) ||
