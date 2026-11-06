@@ -37,7 +37,8 @@ interface ConversationStatusDotProps {
 type Visual =
   | "check"
   | "working"
-  | "active"
+  | "idle"
+  | "needs-you"
   | "paused"
   | "error"
   | "unknown"
@@ -50,8 +51,9 @@ const visualFor = (status: ExecutionStatus | null | undefined): Visual => {
     case ExecutionStatus.RUNNING:
       return "working";
     case ExecutionStatus.IDLE:
+      return "idle";
     case ExecutionStatus.WAITING_FOR_CONFIRMATION:
-      return "active";
+      return "needs-you";
     case ExecutionStatus.PAUSED:
       return "paused";
     case ExecutionStatus.ERROR:
@@ -70,8 +72,11 @@ const labelKeyFor = (visual: Visual, isArchived?: boolean): string => {
     case "check":
       return "COMMON$FINISHED";
     case "working":
-    case "active":
-      return "COMMON$WORKING";
+      return I18nKey.AGENT_STATUS$RUNNING_TASK;
+    case "idle":
+      return I18nKey.AGENT_STATUS$WAITING_FOR_TASK;
+    case "needs-you":
+      return I18nKey.AGENT_STATUS$WAITING_FOR_USER_CONFIRMATION;
     case "paused":
       return "COMMON$PAUSED";
     case "error":
@@ -112,11 +117,23 @@ function renderIndicator(visual: Visual) {
           className="w-1.5 h-1.5 rounded-full animate-pulse bg-status-success"
         />
       );
-    case "active":
+    case "idle":
+      // Idle is not working: the agent has nothing in flight, so the dot is a
+      // hollow neutral ring rather than the solid green "working" dot. (An
+      // idle row reading as active green is upstream issue #16752.)
       return (
         <span
-          data-testid="conversation-status-active"
-          className="w-1.5 h-1.5 rounded-full bg-status-success"
+          data-testid="conversation-status-idle"
+          className="w-1.5 h-1.5 rounded-full border border-muted"
+        />
+      );
+    case "needs-you":
+      // Waiting for confirmation is the one state that needs the user, and it
+      // used to read as "Working". Amber is reserved for "come back here".
+      return (
+        <span
+          data-testid="conversation-status-needs-you"
+          className="w-1.5 h-1.5 rounded-full bg-warning"
         />
       );
     case "paused":

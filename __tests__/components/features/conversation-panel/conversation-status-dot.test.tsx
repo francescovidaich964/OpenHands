@@ -37,13 +37,21 @@ describe("ConversationStatusDot", () => {
 
   it.each([
     [ExecutionStatus.FINISHED, "conversation-status-check", "COMMON$FINISHED"],
-    [ExecutionStatus.RUNNING, "conversation-status-working", "COMMON$WORKING"],
+    [
+      ExecutionStatus.RUNNING,
+      "conversation-status-working",
+      "AGENT_STATUS$RUNNING_TASK",
+    ],
     [ExecutionStatus.PAUSED, "conversation-status-paused", "COMMON$PAUSED"],
-    [ExecutionStatus.IDLE, "conversation-status-active", "COMMON$WORKING"],
+    [
+      ExecutionStatus.IDLE,
+      "conversation-status-idle",
+      "AGENT_STATUS$WAITING_FOR_TASK",
+    ],
     [
       ExecutionStatus.WAITING_FOR_CONFIRMATION,
-      "conversation-status-active",
-      "COMMON$WORKING",
+      "conversation-status-needs-you",
+      "AGENT_STATUS$WAITING_FOR_USER_CONFIRMATION",
     ],
     [ExecutionStatus.ERROR, "conversation-status-error", "COMMON$ERROR"],
     [ExecutionStatus.STUCK, "conversation-status-error", "COMMON$ERROR"],
@@ -55,6 +63,39 @@ describe("ConversationStatusDot", () => {
       "data-content",
       tooltipLabel,
     );
+  });
+
+  it("labels the three live states differently so idle never reads as working", () => {
+    const labelFor = (status: ExecutionStatus) => {
+      const { unmount } = renderWithProviders(
+        <ConversationStatusDot executionStatus={status} />,
+      );
+      const label = screen
+        .getByTestId("styled-tooltip")
+        .getAttribute("data-content");
+      unmount();
+      return label;
+    };
+
+    const labels = new Set([
+      labelFor(ExecutionStatus.IDLE),
+      labelFor(ExecutionStatus.RUNNING),
+      labelFor(ExecutionStatus.WAITING_FOR_CONFIRMATION),
+    ]);
+    expect(labels.size).toBe(3);
+  });
+
+  it("renders idle as a neutral hollow dot, not the working dot", () => {
+    renderWithProviders(
+      <ConversationStatusDot executionStatus={ExecutionStatus.IDLE} />,
+    );
+
+    expect(screen.getByTestId("conversation-status-idle")).toHaveClass(
+      "border-muted",
+    );
+    expect(
+      screen.queryByTestId("conversation-status-working"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the unknown state for missing execution status", () => {
